@@ -84,33 +84,10 @@ build_for_arch() {
         return 1
     fi
 
-    # Create Info.plist
-    cat > "$CONTENTS/Info.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>$APP_NAME</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.example.$APP_NAME</string>
-    <key>CFBundleName</key>
-    <string>$APP_NAME</string>
-    <key>CFBundleShortVersionString</key>
-    <string>$VERSION</string>
-    <key>CFBundleVersion</key>
-    <string>$VERSION</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-</dict>
-</plist>
-EOF
+    # Create Info.plist (allows http:// IPTV/EPG servers)
+    cp "Sources/PlayIPTV/Info.plist" "$CONTENTS/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$CONTENTS/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$CONTENTS/Info.plist"
 
     echo "🎨 Setting up AppIcon..."
     # Pre-generated icon check
