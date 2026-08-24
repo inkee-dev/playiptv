@@ -121,6 +121,7 @@ struct GeneralSettingsView: View {
 struct SourceSettingsView: View {
     @Bindable var appState: AppState
     @ObservedObject private var epgManager = EPGManager.shared
+    @Environment(\.openWindow) private var openWindow
     @State private var showingAddSource = false
     @State private var editingSource: Source?
     
@@ -180,6 +181,14 @@ struct SourceSettingsView: View {
                                     }
                                     .padding(.top, 2)
                                     
+                                    if let error = appState.sourceLoadErrors[source.id] {
+                                        Text(error)
+                                            .font(.caption2)
+                                            .foregroundStyle(.orange)
+                                            .lineLimit(2)
+                                            .padding(.top, 2)
+                                    }
+                                    
                                     // EPG Status
                                     if source.epgUrl != nil {
                                         HStack(spacing: 6) {
@@ -234,8 +243,17 @@ struct SourceSettingsView: View {
                             
                             // Status Icon
                             if !appState.loadingSources.contains(source.id) {
-                                Image(systemName: "checkmark.circle")
-                                    .foregroundStyle(.secondary.opacity(0.5))
+                                if let error = appState.sourceLoadErrors[source.id] {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.orange)
+                                        .help(error)
+                                } else if (appState.sourceContent[source.id]?.channels.isEmpty ?? true) {
+                                    Image(systemName: "questionmark.circle")
+                                        .foregroundStyle(.secondary.opacity(0.5))
+                                } else {
+                                    Image(systemName: "checkmark.circle")
+                                        .foregroundStyle(.secondary.opacity(0.5))
+                                }
                             }
                         }
                         .contextMenu {
@@ -278,8 +296,14 @@ struct SourceSettingsView: View {
                 
                 Spacer()
                 
-                // Placeholder for symmetry or Delete button if we added selection state to the list
-                Color.clear.frame(width: 20, height: 20)
+                Button(action: {
+                    openWindow(id: "debug")
+                }) {
+                    Image(systemName: "ant")
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.borderless)
+                .help("Connection Debug")
             }
             .padding(.horizontal)
             .padding(.vertical, 8)

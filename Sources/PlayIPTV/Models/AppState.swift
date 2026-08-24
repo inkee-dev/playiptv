@@ -223,6 +223,7 @@ class AppState {
         
         // Load content for all sources
         Task {
+            DebugLog.shared.info("PlayIPTV starting — \(sources.count) saved source(s)", category: "App")
             await loadAllSources()
             
             // Restore selection AFTER loading (or concurrent with it)
@@ -314,7 +315,7 @@ class AppState {
             let normalizedPath = (path as NSString).standardizingPath
             if fileManager.fileExists(atPath: normalizedPath) {
                 debugConfigPath = normalizedPath
-                print("DEBUG: Found debug-config.json at: \(normalizedPath)")
+                DebugLog.shared.info("Found debug-config.json at \(normalizedPath)", category: "App")
                 break
             }
         }
@@ -330,7 +331,7 @@ class AppState {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let sourcesArray = json["sources"] as? [[String: String]] else {
-            print("DEBUG: Failed to parse debug-config.json at \(configPath)")
+            DebugLog.shared.error("Failed to parse debug-config.json at \(configPath)", category: "App")
             return
         }
         
@@ -396,7 +397,7 @@ class AppState {
                 continue
             }
             
-            print("DEBUG: Adding debug source: \(name) (\(typeString))")
+            DebugLog.shared.info("Adding debug source \(name) (\(typeString))", source: name, category: "App")
             sources.append(debugSource)
             
             // Track first source
@@ -704,20 +705,138 @@ class AppState {
     
     var isLoading: Bool = false
     var errorMessage: String?
+    var sourceLoadErrors: [UUID: String] = [:]
+    
+    var listDiagnosis: ListDiagnosis {
+        if sources.isEmpty {
+            return ListDiagnosis(
+                title: "No sources",
+                detail: "Add an M3U or Xtream source in Settings.",
+                isEmpty: true,
+                isError: false,
+                isLoading: false
+            )
+        }
+        
+        guard let source = selectedSource else {
+            return ListDiagnosis(
+                title: "No source selected",
+                detail: "Pick a source from the toolbar to load its channels.",
+                isEmpty: true,
+                isError: false,
+                isLoading: false
+            )
+        }
+        
+        if loadingSources.contains(source.id) {
+            return ListDiagnosis(
+                title: "Connecting to \(source.name)…",
+                detail: "Fetching playlist or Xtream API data.",
+                isEmpty: true,
+                isError: false,
+                isLoading: true
+            )
+        }
+        
+        if let error = sourceLoadErrors[source.id] {
+            return ListDiagnosis(
+                title: "Failed to load \(source.name)",
+                detail: error,
+                isEmpty: true,
+                isError: true,
+                isLoading: false
+            )
+        }
+        
+        let content = sourceContent[source.id]
+        let total = content?.channels.count ?? 0
+        let categoryName = selectedCategory?.name ?? "All Channels"
+        
+        if content == nil {
+            return ListDiagnosis(
+                title: "\(source.name) has not loaded yet",
+                detail: "Reload the source from Settings or the debug window.",
+                isEmpty: true,
+                isError: false,
+                isLoading: false
+            )
+        }
+        
+        if total == 0 {
+            return ListDiagnosis(
+                title: "Source returned no channels",
+                detail: "The request finished but \(source.name) had 0 live, movie, or series items. Check the connection log for HTTP status and parse results.",
+                isEmpty: true,
+                isError: true,
+                isLoading: false
+            )
+        }
+        
+        if !channelSearchText.isEmpty && filteredChannels.isEmpty {
+            return ListDiagnosis(
+                title: "No matches for “\(channelSearchText)”",
+                detail: "\(total) item(s) loaded, but none match this search in \(categoryName).",
+                isEmpty: true,
+                isError: false,
+                isLoading: false
+            )
+        }
+        
+        if let cat = selectedCategory {
+            if cat.id == "fav_live" && filteredChannels.isEmpty {
+                return ListDiagnosis(
+                    title: "No live favorites",
+                    detail: "\(total) item(s) loaded on \(source.name). Favorite a live channel to see it here.",
+                    isEmpty: true,
+                    isError: false,
+                    isLoading: false
+                )
+            }
+            if cat.id == "fav_vod" && filteredChannels.isEmpty {
+                return ListDiagnosis(
+                    title: "No VOD favorites",
+                    detail: "\(total) item(s) loaded on \(source.name). Favorite a movie or series to see it here.",
+                    isEmpty: true,
+                    isError: false,
+                    isLoading: false
+                )
+            }
+            if cat.id == "recent" && filteredChannels.isEmpty {
+                return ListDiagnosis(
+                    title: "No recent VOD",
+                    detail: "Watch a movie or episode and it will show up here.",
+                    isEmpty: true,
+                    isError: false,
+                    isLoading: false
+                )
+            }
+            if filteredChannels.isEmpty {
+                return ListDiagnosis(
+                    title: "No channels in \(cat.name)",
+                    detail: "\(total) item(s) loaded on \(source.name), but none are in this category.",
+                    isEmpty: true,
+                    isError: false,
+                    isLoading: false
+                )
+            }
+        }
+        
+        return ListDiagnosis(
+            title: "\(filteredChannels.count) item(s) shown",
+            detail: "\(source.name) · \(total) total · \(categoryName)",
+            isEmpty: false,
+            isError: false,
+            isLoading: false
+        )
+    }
     
     // Multi-source management
     var sources: [Source] = []
     
     func loadAllSources() async {
-        print("DEBUG: Loading all sources...")
+        DebugLog.shared.info("Loading \(sources.count) source(s)…", category: "Source")
         await MainActor.run {
             loadingSources = Set(sources.map { $0.id })
-            
-            // Set initial selected source if needed (logic moved to init Task, but good to keep safe)
-            if selectedSource == nil && !sources.isEmpty {
-                // Only set if not already set by init logic
-                 // selectedSource = sources.first // Let init handle this to prefer saved source
-            }
         }
         
         await withTaskGroup(of: Void.self) { group in
@@ -731,9 +850,18 @@ class AppState {
     
     // Load Specific Source
     func loadSource(_ source: Source) async {
-        print("DEBUG: Loading source: \(source.name)")
+        let endpoint = source.type == .m3u ? source.m3uUrl : source.xtreamUrl
+        DebugLog.shared.info(
+            "Connecting to \(source.name) (\(source.type == .m3u ? "M3U" : "Xtream"))",
+            source: source.name,
+            category: "Source",
+            detail: endpoint.map { DebugLog.redact($0) }
+        )
         
-        _ = await MainActor.run { loadingSources.insert(source.id) }
+        await MainActor.run {
+            loadingSources.insert(source.id)
+            sourceLoadErrors.removeValue(forKey: source.id)
+        }
         
         let newContent: SourceContent
         
@@ -747,15 +875,27 @@ class AppState {
         await MainActor.run {
             sourceContent[source.id] = newContent
             loadingSources.remove(source.id)
-            print("DEBUG: Loaded \(newContent.channels.count) channels for \(source.name)")
             
-            // Set default selected category to first Live TV category if none selected
+            if sourceLoadErrors[source.id] == nil {
+                if newContent.channels.isEmpty {
+                    let message = "Connected but received 0 channels."
+                    sourceLoadErrors[source.id] = message
+                    DebugLog.shared.warning(message, source: source.name, category: "Source")
+                } else {
+                    DebugLog.shared.success(
+                        "Loaded \(newContent.channels.count) item(s) for \(source.name)",
+                        source: source.name,
+                        category: "Source"
+                    )
+                }
+            }
+            
             if selectedCategory == nil {
                 if let liveCategory = newContent.categories.first(where: { $0.type == .live }) {
                     selectedCategory = liveCategory
-                    print("DEBUG: Set default category to: \(liveCategory.name)")
                 }
             }
+            updateFilteredChannels()
         }
     }
     
@@ -763,22 +903,68 @@ class AppState {
     // Load M3U
     private func loadM3U(source: Source) async -> SourceContent {
         guard let urlStr = source.m3uUrl, let url = URL(string: urlStr) else {
-            await MainActor.run { errorMessage = "Invalid M3U URL for \(source.name)" }
+            let message = "Invalid M3U URL"
+            await MainActor.run {
+                errorMessage = "Invalid M3U URL for \(source.name)"
+                sourceLoadErrors[source.id] = message
+            }
+            DebugLog.shared.error(message, source: source.name, category: "M3U", detail: source.m3uUrl)
             return SourceContent()
         }
         
+        DebugLog.shared.info("Fetching playlist \(DebugLog.redact(url))", source: source.name, category: "M3U")
+        
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            guard let content = String(data: data, encoding: .utf8) else {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            if let http = response as? HTTPURLResponse {
+                DebugLog.shared.info("HTTP \(http.statusCode) · \(data.count) bytes", source: source.name, category: "M3U")
+                if !(200...299).contains(http.statusCode) {
+                    let message = "HTTP \(http.statusCode) fetching playlist"
+                    await MainActor.run {
+                        errorMessage = message
+                        sourceLoadErrors[source.id] = message
+                    }
+                    DebugLog.shared.error(message, source: source.name, category: "M3U", detail: DebugLog.preview(data))
+                    return SourceContent()
+                }
+            } else {
+                DebugLog.shared.info("Read \(data.count) bytes from \(url.isFileURL ? "local file" : "URL")", source: source.name, category: "M3U")
+            }
+            
+            guard let content = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else {
                 throw URLError(.cannotDecodeContentData)
             }
             
+            let firstLine = content.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+            let looksLikeM3U = content.contains("#EXTM3U") || content.contains("#EXTINF")
+            if !looksLikeM3U {
+                DebugLog.shared.warning(
+                    "Response does not look like an M3U playlist",
+                    source: source.name,
+                    category: "M3U",
+                    detail: "First line: \(firstLine)"
+                )
+            }
+            
             let parsedChannels = await M3UParser.parse(content: content)
+            let extinfCount = content
+                .components(separatedBy: .newlines)
+                .filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix("#EXTINF:") }
+                .count
+            DebugLog.shared.info(
+                "Parsed \(parsedChannels.count) channel(s) from \(extinfCount) #EXTINF entries",
+                source: source.name,
+                category: "M3U"
+            )
+            if extinfCount > parsedChannels.count {
+                DebugLog.shared.warning(
+                    "Skipped \(extinfCount - parsedChannels.count) entries with invalid stream URLs",
+                    source: source.name,
+                    category: "M3U"
+                )
+            }
             
-            // Create a single "Live TV" category for all M3U content
             let liveCat = Category(id: "live_all", name: "Live TV", type: .live)
-            
-            // Map all channels to this category
             let unifiedChannels = parsedChannels.map { channel in
                 Channel(
                     sourceId: source.id,
@@ -795,8 +981,12 @@ class AppState {
             return SourceContent(channels: unifiedChannels, categories: [liveCat])
             
         } catch {
-            print("ERROR: M3U Load failed for \(source.name): \(error)")
-            await MainActor.run { errorMessage = error.localizedDescription }
+            let message = DebugLog.describe(error)
+            DebugLog.shared.error(message, source: source.name, category: "M3U")
+            await MainActor.run {
+                errorMessage = message
+                sourceLoadErrors[source.id] = message
+            }
             return SourceContent()
         }
     }
@@ -806,20 +996,32 @@ class AppState {
         guard let urlStr = source.xtreamUrl,
               let user = source.xtreamUser,
               let pass = source.xtreamPass,
-              let client = XtreamClient(url: urlStr, username: user, password: pass) else {
-            await MainActor.run { errorMessage = "Invalid Credentials for \(source.name)" }
+              let client = XtreamClient(url: urlStr, username: user, password: pass, sourceName: source.name) else {
+            let message = "Invalid server URL or missing credentials"
+            await MainActor.run {
+                errorMessage = "Invalid Credentials for \(source.name)"
+                sourceLoadErrors[source.id] = message
+            }
+            DebugLog.shared.error(message, source: source.name, category: "Xtream", detail: source.xtreamUrl)
             return SourceContent()
         }
         
         do {
+            DebugLog.shared.info("Authenticating as \(user)", source: source.name, category: "Xtream")
             let authenticated = try await client.authenticate()
             if !authenticated { throw XtreamError.authenticationFailed }
+            DebugLog.shared.success("Authenticated", source: source.name, category: "Xtream")
             
             async let liveChannels = client.fetchLiveStreams(categoryId: nil)
             async let vodChannels = client.fetchVODStreams(categoryId: nil)
             async let seriesChannels = client.fetchSeries(categoryId: nil)
             
             let (live, vod, series) = try await (liveChannels, vodChannels, seriesChannels)
+            DebugLog.shared.info(
+                "Fetched \(live.count) live, \(vod.count) movies, \(series.count) series",
+                source: source.name,
+                category: "Xtream"
+            )
             
             // Create simplified categories
             let liveCat = Category(id: "live_all", name: "Live TV", type: .live)
@@ -834,8 +1036,12 @@ class AppState {
             return SourceContent(channels: taggedLive + taggedVod + taggedSeries, categories: [liveCat, movieCat, seriesCat])
             
         } catch {
-            print("ERROR: Xtream Load failed for \(source.name): \(error)")
-            await MainActor.run { errorMessage = error.localizedDescription }
+            let message = DebugLog.describe(error)
+            DebugLog.shared.error(message, source: source.name, category: "Xtream")
+            await MainActor.run {
+                errorMessage = message
+                sourceLoadErrors[source.id] = message
+            }
             return SourceContent()
         }
     }
@@ -848,7 +1054,8 @@ class AppState {
               let urlStr = source.xtreamUrl,
               let user = source.xtreamUser,
               let pass = source.xtreamPass,
-              let client = XtreamClient(url: urlStr, username: user, password: pass) else {
+              let client = XtreamClient(url: urlStr, username: user, password: pass, sourceName: source.name) else {
+            DebugLog.shared.error("Cannot fetch episodes — invalid source credentials", category: "Xtream")
             return
         }
         
@@ -864,7 +1071,7 @@ class AppState {
                 isLoadingEpisodes = false
             }
         } catch {
-            print("ERROR: Failed to fetch episodes: \(error)")
+            DebugLog.shared.error("Failed to fetch episodes: \(DebugLog.describe(error))", source: source.name, category: "Xtream")
             await MainActor.run {
                 episodesForSeries = []
                 isLoadingEpisodes = false
@@ -875,6 +1082,13 @@ class AppState {
     func addSource(_ source: Source) {
         sources.append(source)
         saveSources()
+        let endpoint = source.type == .m3u ? source.m3uUrl : source.xtreamUrl
+        DebugLog.shared.info(
+            "Added source \(source.name)",
+            source: source.name,
+            category: "Source",
+            detail: endpoint.map { DebugLog.redact($0) }
+        )
         Task {
             await loadSource(source)
             

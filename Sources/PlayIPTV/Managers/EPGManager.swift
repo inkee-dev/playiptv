@@ -41,7 +41,7 @@ class EPGManager: ObservableObject {
         }
         
         do {
-            print("DEBUG: EPG → Loading for source \(sourceId) from \(urlString)")
+            DebugLog.shared.info("Loading EPG from \(DebugLog.redact(urlString))", category: "EPG")
             let (data, _) = try await URLSession.shared.data(from: url)
             
             guard let xmlContent = String(data: data, encoding: .utf8) else {
@@ -57,14 +57,14 @@ class EPGManager: ObservableObject {
                 self.loadingSourceIds.remove(sourceId)
                 self.sourceUpdateTimes[sourceId] = Date()
                 self.sourceErrors.removeValue(forKey: sourceId)
-                print("DEBUG: EPG → Loaded \(channels.count) channels for source \(sourceId)")
+                DebugLog.shared.success("Loaded \(channels.count) EPG channels", category: "EPG")
             }
             
         } catch {
             await MainActor.run {
                 self.loadingSourceIds.remove(sourceId)
                 self.sourceErrors[sourceId] = error.localizedDescription
-                print("ERROR: EPG → Failed to load for source \(sourceId): \(error)")
+                DebugLog.shared.error("EPG load failed: \(DebugLog.describe(error))", category: "EPG")
             }
         }
     }
@@ -84,7 +84,7 @@ class EPGManager: ObservableObject {
         }
         
         do {
-            print("DEBUG: EPG → Loading global EPG from \(urlString)")
+            DebugLog.shared.info("Loading global EPG from \(DebugLog.redact(urlString))", category: "EPG")
             let (data, _) = try await URLSession.shared.data(from: url)
             
             guard let xmlContent = String(data: data, encoding: .utf8) else {
@@ -100,14 +100,14 @@ class EPGManager: ObservableObject {
                 self.isLoading = false
                 self.lastUpdateTime = Date()
                 self.lastError = nil
-                print("DEBUG: EPG → Loaded \(channels.count) channels for global EPG")
+                DebugLog.shared.success("Loaded \(channels.count) channels for global EPG", category: "EPG")
             }
             
         } catch {
             await MainActor.run {
                 self.isLoading = false
                 self.lastError = error.localizedDescription
-                print("ERROR: EPG → Failed to load global EPG: \(error)")
+                DebugLog.shared.error("Global EPG load failed: \(DebugLog.describe(error))", category: "EPG")
             }
         }
     }
