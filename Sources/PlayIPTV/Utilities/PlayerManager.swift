@@ -53,6 +53,9 @@ class PlayerManager: NSObject, ObservableObject {
         }
         
         let media = VLCMedia(url: url)
+        for option in ProxySettings.shared.vlcMediaOptions() {
+            media.addOption(option)
+        }
         
         // Use Task to prevent blocking UI during VLC network operations
         // VLC operations must stay on MainActor but Task makes them async

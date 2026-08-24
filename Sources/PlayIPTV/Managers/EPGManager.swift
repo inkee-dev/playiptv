@@ -42,7 +42,7 @@ class EPGManager: ObservableObject {
         
         do {
             DebugLog.shared.info("Loading EPG from \(DebugLog.redact(urlString))", category: "EPG")
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, _) = try await NetworkSession.shared.data(from: url)
             
             guard let xmlContent = String(data: data, encoding: .utf8) else {
                 throw EPGError.invalidData
@@ -85,7 +85,7 @@ class EPGManager: ObservableObject {
         
         do {
             DebugLog.shared.info("Loading global EPG from \(DebugLog.redact(urlString))", category: "EPG")
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, _) = try await NetworkSession.shared.data(from: url)
             
             guard let xmlContent = String(data: data, encoding: .utf8) else {
                 throw EPGError.invalidData

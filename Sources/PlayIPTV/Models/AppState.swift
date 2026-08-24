@@ -288,6 +288,22 @@ class AppState {
                 }
             }
             .store(in: &cancellables)
+        
+        NotificationCenter.default.publisher(for: ProxySettings.didChangeNotification)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    await self?.reloadAfterProxyChange()
+                }
+            }
+            .store(in: &cancellables)
+    }
+    
+    private func reloadAfterProxyChange() async {
+        let replayChannel = selectedChannel
+        await loadAllSources()
+        if let channel = replayChannel {
+            PlayerManager.shared.play(url: channel.streamUrl, streamId: channel.streamId, force: true)
+        }
     }
     
     private func loadDebugSourceIfAvailable() {
@@ -851,11 +867,16 @@ class AppState {
     // Load Specific Source
     func loadSource(_ source: Source) async {
         let endpoint = source.type == .m3u ? source.m3uUrl : source.xtreamUrl
+        var detail = endpoint.map { DebugLog.redact($0) }
+        if ProxySettings.shared.isActive {
+            let proxyNote = "via proxy: \(ProxySettings.shared.summaryForDebug())"
+            detail = detail.map { "\($0)\n\(proxyNote)" } ?? proxyNote
+        }
         DebugLog.shared.info(
             "Connecting to \(source.name) (\(source.type == .m3u ? "M3U" : "Xtream"))",
             source: source.name,
             category: "Source",
-            detail: endpoint.map { DebugLog.redact($0) }
+            detail: detail
         )
         
         await MainActor.run {
@@ -915,7 +936,7 @@ class AppState {
         DebugLog.shared.info("Fetching playlist \(DebugLog.redact(url))", source: source.name, category: "M3U")
         
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await NetworkSession.shared.data(from: url)
             if let http = response as? HTTPURLResponse {
                 DebugLog.shared.info("HTTP \(http.statusCode) · \(data.count) bytes", source: source.name, category: "M3U")
                 if !(200...299).contains(http.statusCode) {

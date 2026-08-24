@@ -64,7 +64,7 @@ struct XtreamClient {
         DebugLog.log(.info, "GET \(DebugLog.redact(url))", source: sourceName, category: "Xtream")
         
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await NetworkSession.shared.data(from: url)
             let status = (response as? HTTPURLResponse)?.statusCode
             DebugLog.log(
                 .info,
