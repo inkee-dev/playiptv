@@ -91,6 +91,10 @@ class AppState {
     var selectedChannel: Channel? {
         didSet {
             print("DEBUG: AppState - selectedChannel changed from \(oldValue?.name ?? "nil") to \(selectedChannel?.name ?? "nil")")
+            if selectedChannel == nil {
+                playbackGeneration += 1
+                isOpeningExternalStream = false
+            }
         }
     }
     var searchText: String = ""
@@ -152,6 +156,33 @@ class AppState {
             UserDefaults.standard.set(epgRefreshInterval.rawValue, forKey: "epgRefreshInterval")
         }
     }
+
+    enum PlaybackTarget: String, CaseIterable, Codable, Identifiable {
+        case builtIn = "Built-in"
+        case vlc = "VLC"
+
+        var id: String { rawValue }
+
+        var isExternal: Bool { self != .builtIn }
+    }
+
+    var playbackTarget: PlaybackTarget = .builtIn {
+        didSet {
+            guard oldValue != playbackTarget else { return }
+            UserDefaults.standard.set(playbackTarget.rawValue, forKey: "playbackTarget")
+            guard let channel = selectedChannel else {
+                if playbackTarget.isExternal {
+                    PlayerManager.shared.stop()
+                }
+                externalPlaybackError = nil
+                return
+            }
+            playChannel(channel, startPosition: nil, force: true)
+        }
+    }
+
+    var isOpeningExternalStream: Bool = false
+    var externalPlaybackError: String?
     
     // Settings Navigation
     enum SettingsTab: Hashable {
@@ -215,6 +246,11 @@ class AppState {
         if let savedInterval = UserDefaults.standard.string(forKey: "epgRefreshInterval"),
            let interval = EPGRefreshInterval(rawValue: savedInterval) {
             self.epgRefreshInterval = interval
+        }
+
+        if let savedPlayer = UserDefaults.standard.string(forKey: "playbackTarget"),
+           let player = PlaybackTarget(rawValue: savedPlayer) {
+            self.playbackTarget = player
         }
         
         #if DEBUG
@@ -302,7 +338,7 @@ class AppState {
         let replayChannel = selectedChannel
         await loadAllSources()
         if let channel = replayChannel {
-            PlayerManager.shared.play(url: channel.streamUrl, streamId: channel.streamId, force: true)
+            playChannel(channel, startPosition: nil, force: true)
         }
     }
     
@@ -1340,31 +1376,42 @@ class AppState {
         }
     }
     
-    func playChannel(_ channel: Channel, startPosition: Double?) {
+    func playChannel(_ channel: Channel, startPosition: Double?, force: Bool = false) {
         playbackGeneration += 1
         let generation = playbackGeneration
+        externalPlaybackError = nil
+
+        if playbackTarget.isExternal {
+            PlayerManager.shared.stop()
+            isOpeningExternalStream = true
+        } else {
+            isOpeningExternalStream = false
+        }
+
         guard let stalkerLink = StalkerLink.parse(channel.streamUrl) else {
-            PlayerManager.shared.play(
+            beginPlayback(
                 url: channel.streamUrl,
-                streamId: channel.streamId,
+                channel: channel,
                 startPosition: startPosition,
-                force: false
+                force: force,
+                userAgent: nil,
+                referrer: nil,
+                generation: generation
             )
             return
         }
 
-        PlayerManager.shared.isLoading = true
-        PlayerManager.shared.hasError = false
+        if !playbackTarget.isExternal {
+            PlayerManager.shared.isLoading = true
+            PlayerManager.shared.hasError = false
+        }
         Task {
             guard let source = sources.first(where: { $0.id == channel.sourceId }),
                   let portal = source.stalkerUrl,
                   let mac = source.stalkerMac,
                   let client = StalkerClient(portal: portal, mac: mac, login: source.stalkerLogin, password: source.stalkerPassword, sourceName: source.name) else {
                 guard playbackGeneration == generation else { return }
-                PlayerManager.shared.isLoading = false
-                PlayerManager.shared.hasError = true
-                errorMessage = "Missing Stalker portal credentials"
-                DebugLog.shared.error("Missing Stalker portal credentials for \(channel.name)", category: "Stalker")
+                failPlayback(message: "Missing Stalker portal credentials", channel: channel, category: "Stalker")
                 return
             }
 
@@ -1373,23 +1420,81 @@ class AppState {
                 let url = try await client.resolveLink(type: stalkerLink.type, cmd: stalkerLink.cmd, series: stalkerLink.series)
                 guard playbackGeneration == generation else { return }
                 DebugLog.shared.success("Resolved link for \(channel.name)", source: source.name, category: "Stalker", detail: DebugLog.redact(url))
-                PlayerManager.shared.play(
+                beginPlayback(
                     url: url,
-                    streamId: channel.streamId,
+                    channel: channel,
                     startPosition: startPosition,
-                    force: false,
+                    force: force,
                     userAgent: StalkerLink.playbackUserAgent,
-                    referrer: portal
+                    referrer: portal,
+                    generation: generation
                 )
             } catch {
                 guard playbackGeneration == generation else { return }
-                let message = DebugLog.describe(error)
-                DebugLog.shared.error("Link failed for \(channel.name): \(message)", source: source.name, category: "Stalker")
-                PlayerManager.shared.isLoading = false
-                PlayerManager.shared.hasError = true
-                errorMessage = message
+                failPlayback(message: DebugLog.describe(error), channel: channel, category: "Stalker", source: source.name)
             }
         }
+    }
+
+    private func beginPlayback(
+        url: URL,
+        channel: Channel,
+        startPosition: Double?,
+        force: Bool,
+        userAgent: String?,
+        referrer: String?,
+        generation: Int
+    ) {
+        switch playbackTarget {
+        case .builtIn:
+            isOpeningExternalStream = false
+            PlayerManager.shared.play(
+                url: url,
+                streamId: channel.streamId,
+                startPosition: startPosition,
+                force: force,
+                userAgent: userAgent,
+                referrer: referrer
+            )
+        case .vlc:
+            Task {
+                do {
+                    try await ExternalPlayer.openInVLC(
+                        url: url,
+                        title: channel.name,
+                        userAgent: userAgent,
+                        referrer: referrer,
+                        startPosition: startPosition
+                    )
+                    guard playbackGeneration == generation else { return }
+                    isOpeningExternalStream = false
+                    DebugLog.shared.success(
+                        "Opened \(channel.name) in VLC",
+                        category: "Playback",
+                        detail: DebugLog.redact(url)
+                    )
+                } catch {
+                    guard playbackGeneration == generation else { return }
+                    let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    isOpeningExternalStream = false
+                    externalPlaybackError = message
+                    errorMessage = message
+                    DebugLog.shared.error(message, category: "Playback", detail: DebugLog.redact(url))
+                }
+            }
+        }
+    }
+
+    private func failPlayback(message: String, channel: Channel, category: String, source: String? = nil) {
+        isOpeningExternalStream = false
+        errorMessage = message
+        if playbackTarget.isExternal {
+            externalPlaybackError = message
+        } else {
+            PlayerManager.shared.isLoading = false
+            PlayerManager.shared.hasError = true
+        }
+        DebugLog.shared.error("Link failed for \(channel.name): \(message)", source: source, category: category)
     }
     
     // MARK: - EPG Auto-Refresh

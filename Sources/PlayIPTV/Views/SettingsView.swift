@@ -48,6 +48,31 @@ struct GeneralSettingsView: View {
                     }
                     .padding()
                 }
+
+                GroupBox(label: Label("Playback", systemImage: "play.rectangle")) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Open streams in")
+                            .font(.subheadline)
+                        Picker("Open streams in", selection: $appState.playbackTarget) {
+                            ForEach(AppState.PlaybackTarget.allCases) { target in
+                                Text(target.rawValue).tag(target)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+
+                        Text(playbackTargetDescription)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        if appState.playbackTarget == .vlc && !ExternalPlayer.isVLCInstalled {
+                            Text("VLC was not found in Applications. Install it, then play a channel again.")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    .padding()
+                }
                 
                 GroupBox(label: Label("Network Proxy", systemImage: "network")) {
                     VStack(alignment: .leading, spacing: 10) {
@@ -160,6 +185,15 @@ struct GeneralSettingsView: View {
             }
             }
             .padding()
+        }
+    }
+
+    private var playbackTargetDescription: String {
+        switch appState.playbackTarget {
+        case .builtIn:
+            return "Streams play in the window."
+        case .vlc:
+            return "Streams open in the VLC app. VLC keeps its own playback controls."
         }
     }
 }

@@ -22,6 +22,14 @@ struct PlayerView: View {
     var isFullscreen: Bool = false
     
     var body: some View {
+        if appState.playbackTarget.isExternal {
+            ExternalStreamPlaceholder()
+        } else {
+            builtInPlayer
+        }
+    }
+
+    private var builtInPlayer: some View {
         ZStack {
             SingletonVLCView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -99,6 +107,62 @@ struct PlayerView: View {
         .onChange(of: appState.playPauseSignal) { _, _ in
             PlayerManager.shared.togglePlayPause()
         }
+    }
+}
+
+struct ExternalStreamPlaceholder: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        ZStack {
+            Color.black
+            VStack(spacing: 16) {
+                if appState.isOpeningExternalStream {
+                    ProgressView()
+                        .controlSize(.large)
+                        .tint(.white)
+                    if let name = appState.selectedChannel?.name {
+                        Text(name)
+                            .font(.title3)
+                            .foregroundStyle(.white)
+                            .multilineTextAlignment(.center)
+                    }
+                    Text("Opening in VLC")
+                        .foregroundStyle(.white.opacity(0.75))
+                } else if let error = appState.externalPlaybackError {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.yellow)
+                    Text("Could not open VLC")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
+                    Text(error)
+                        .font(.body)
+                        .foregroundStyle(.white.opacity(0.8))
+                        .multilineTextAlignment(.center)
+                    if let channel = appState.selectedChannel {
+                        Button("Retry") {
+                            appState.playChannel(channel, startPosition: nil, force: true)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .padding(.top, 6)
+                    }
+                } else if let channel = appState.selectedChannel {
+                    Image(systemName: "play.rectangle.fill")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.white.opacity(0.9))
+                    Text(channel.name)
+                        .font(.title3)
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                    Text("Playing in VLC")
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+            }
+            .padding(40)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

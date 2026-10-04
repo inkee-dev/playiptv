@@ -33,12 +33,14 @@ struct ContentView: View {
             }
         }
         .onChange(of: appState.playPauseSignal) { _, _ in
+            guard !appState.playbackTarget.isExternal else { return }
             PlayerManager.shared.togglePlayPause()
         }
         .onChange(of: appState.fullscreenToggleSignal) { _, _ in
             NSApp.keyWindow?.toggleFullScreen(nil)
         }
         .onChange(of: appState.muteToggleSignal) { _, _ in
+            guard !appState.playbackTarget.isExternal else { return }
             PlayerManager.shared.toggleMute()
         }
         .onKeyPress(.init("f")) {
@@ -251,7 +253,7 @@ struct ContentView: View {
                         .background(Circle().fill(Color.black.opacity(0.4)))
                 }
                 .buttonStyle(.plain)
-                .help("Stop Playback")
+                .help(appState.playbackTarget.isExternal ? "Close" : "Stop Playback")
                 .padding(20)
             }
         }
