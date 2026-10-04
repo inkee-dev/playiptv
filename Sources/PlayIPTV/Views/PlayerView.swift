@@ -39,10 +39,21 @@ struct PlayerView: View {
             if playerManager.isLoading {
                 Color.black
                     .overlay {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                            .controlSize(.large)
-                            .environment(\.colorScheme, .dark) // Forces white spinner
+                        VStack(spacing: 16) {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .controlSize(.large)
+                                .environment(\.colorScheme, .dark) // Forces white spinner
+                            if let detail = playerManager.playbackDetail, !detail.isEmpty {
+                                Text(detail)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundColor(.white.opacity(0.75))
+                                    .multilineTextAlignment(.leading)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: 560, alignment: .leading)
+                            }
+                        }
+                        .padding(32)
                     }
                     .transition(.opacity)
                     .zIndex(1)
@@ -62,18 +73,31 @@ struct PlayerView: View {
                                 .fontWeight(.semibold)
                                 .foregroundColor(.white)
                             
-                            Text("Unable to load the video stream.\nThe source may be offline or invalid.")
-                                .font(.body)
-                                .foregroundColor(.white.opacity(0.8))
-                                .multilineTextAlignment(.center)
+                            ScrollView {
+                                Text(playerManager.errorDetail ?? "Unable to load the video stream.\nThe source may be offline or invalid.")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundColor(.white.opacity(0.85))
+                                    .multilineTextAlignment(.leading)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(maxWidth: 560, maxHeight: 220)
                             
                             HStack(spacing: 15) {
                                 Button("Retry") {
-                                    if let url = playerManager.player.media?.url {
-                                        playerManager.play(url: url, force: true)
+                                    if let channel = appState.selectedChannel {
+                                        appState.playChannel(channel, startPosition: nil, force: true)
                                     }
                                 }
                                 .buttonStyle(.borderedProminent)
+                                
+                                Button("Copy Details") {
+                                    let text = playerManager.errorDetail ?? ""
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(text, forType: .string)
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(playerManager.errorDetail == nil)
                                 
                                 Button("Close") {
                                     appState.selectedChannel = nil
@@ -138,9 +162,11 @@ struct ExternalStreamPlaceholder: View {
                         .fontWeight(.semibold)
                         .foregroundStyle(.white)
                     Text(error)
-                        .font(.body)
-                        .foregroundStyle(.white.opacity(0.8))
-                        .multilineTextAlignment(.center)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .multilineTextAlignment(.leading)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: 560, alignment: .leading)
                     if let channel = appState.selectedChannel {
                         Button("Retry") {
                             appState.playChannel(channel, startPosition: nil, force: true)

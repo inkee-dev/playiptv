@@ -1445,6 +1445,7 @@ class AppState {
         referrer: String?,
         generation: Int
     ) {
+        let sourceName = sources.first(where: { $0.id == channel.sourceId })?.name
         switch playbackTarget {
         case .builtIn:
             isOpeningExternalStream = false
@@ -1454,9 +1455,17 @@ class AppState {
                 startPosition: startPosition,
                 force: force,
                 userAgent: userAgent,
-                referrer: referrer
+                referrer: referrer,
+                channelName: channel.name,
+                sourceName: sourceName
             )
         case .vlc:
+            DebugLog.shared.info(
+                "Opening \(channel.name) in VLC",
+                source: sourceName,
+                category: "Playback",
+                detail: DebugLog.redact(url)
+            )
             Task {
                 do {
                     try await ExternalPlayer.openInVLC(
@@ -1476,10 +1485,11 @@ class AppState {
                 } catch {
                     guard playbackGeneration == generation else { return }
                     let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    let detail = "\(message)\nChannel: \(channel.name)\nURL: \(DebugLog.redact(url))"
                     isOpeningExternalStream = false
-                    externalPlaybackError = message
-                    errorMessage = message
-                    DebugLog.shared.error(message, category: "Playback", detail: DebugLog.redact(url))
+                    externalPlaybackError = detail
+                    errorMessage = detail
+                    DebugLog.shared.error(message, source: sourceName, category: "Playback", detail: detail)
                 }
             }
         }
@@ -1488,13 +1498,17 @@ class AppState {
     private func failPlayback(message: String, channel: Channel, category: String, source: String? = nil) {
         isOpeningExternalStream = false
         errorMessage = message
+        let detail = [
+            message,
+            "Channel: \(channel.name)",
+            "URL: \(DebugLog.redact(channel.streamUrl))"
+        ].joined(separator: "\n")
         if playbackTarget.isExternal {
-            externalPlaybackError = message
+            externalPlaybackError = detail
         } else {
-            PlayerManager.shared.isLoading = false
-            PlayerManager.shared.hasError = true
+            PlayerManager.shared.presentFailure(detail)
         }
-        DebugLog.shared.error("Link failed for \(channel.name): \(message)", source: source, category: category)
+        DebugLog.shared.error("Link failed for \(channel.name): \(message)", source: source, category: category, detail: detail)
     }
     
     // MARK: - EPG Auto-Refresh

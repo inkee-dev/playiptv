@@ -9,9 +9,22 @@ class PlayerManager: NSObject, ObservableObject {
     @Published var isPlaying: Bool = false
     @Published var isLoading: Bool = false
     @Published var hasError: Bool = false
+    /// Redacted URL and connection context shown while a stream is opening.
+    @Published var playbackDetail: String?
+    /// Why playback failed, including the HTTP check when one was made.
+    @Published var errorDetail: String?
     
     private var currentUrl: URL?
     private var currentStreamId: String?
+    private var currentUserAgent: String?
+    private var currentReferrer: String?
+    private var channelName: String?
+    private var sourceName: String?
+    private var failureReason: String?
+    private var probeSummary: String?
+    private var probeTask: Task<Void, Never>?
+    private var suppressStateFailure = false
+    private var announcedPlayback = false
     private var positionSaveTimer: Timer?
     private var debounceTask: Task<Void, Never>?
     private var timeoutTask: Task<Void, Never>?
@@ -25,7 +38,16 @@ class PlayerManager: NSObject, ObservableObject {
     
     // MARK: - Playback Control
     
-    func play(url: URL, streamId: String? = nil, startPosition: Double? = nil, force: Bool = false, userAgent: String? = nil, referrer: String? = nil) {
+    func play(
+        url: URL,
+        streamId: String? = nil,
+        startPosition: Double? = nil,
+        force: Bool = false,
+        userAgent: String? = nil,
+        referrer: String? = nil,
+        channelName: String? = nil,
+        sourceName: String? = nil
+    ) {
         if !force && currentUrl == url && player.isPlaying {
             print("DEBUG: VLC → Already playing \(url.lastPathComponent)")
             return
@@ -34,10 +56,27 @@ class PlayerManager: NSObject, ObservableObject {
         print("DEBUG: VLC → Loading \(url.lastPathComponent)")
         currentUrl = url
         currentStreamId = streamId
+        currentUserAgent = userAgent
+        currentReferrer = referrer
+        self.channelName = channelName
+        self.sourceName = sourceName
+        failureReason = nil
+        probeSummary = nil
+        announcedPlayback = false
+        probeTask?.cancel()
+        probeTask = nil
         
         // Explicitly start loading
         isLoading = true
         hasError = false
+        errorDetail = nil
+        playbackDetail = contextLines().joined(separator: "\n")
+        DebugLog.shared.info(
+            "Opening \(channelName ?? url.lastPathComponent)",
+            source: sourceName,
+            category: "Playback",
+            detail: playbackDetail
+        )
         
         // Cancel any existing timeout
         timeoutTask?.cancel()
@@ -46,9 +85,8 @@ class PlayerManager: NSObject, ObservableObject {
         timeoutTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
             if !Task.isCancelled && isLoading {
-                print("DEBUG: VLC → Timeout - Stream failed to load within 10 seconds")
-                isLoading = false
-                hasError = true
+                let state = vlcStateName(player.state)
+                noteFailure("Timed out after 10 seconds. The player was still \(state).")
             }
         }
         
@@ -129,13 +167,39 @@ class PlayerManager: NSObject, ObservableObject {
         
         debounceTask?.cancel()
         debounceTask = nil
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        probeTask?.cancel()
+        probeTask = nil
         
         player.stop()
         player.media = nil
         currentUrl = nil
         currentStreamId = nil
+        currentUserAgent = nil
+        currentReferrer = nil
+        channelName = nil
+        sourceName = nil
+        failureReason = nil
+        probeSummary = nil
+        announcedPlayback = false
         isPlaying = false
         isLoading = false
+        hasError = false
+        playbackDetail = nil
+        errorDetail = nil
+    }
+
+    /// Failure before the player starts, such as a link that could not be resolved.
+    func presentFailure(_ detail: String) {
+        timeoutTask?.cancel()
+        probeTask?.cancel()
+        probeTask = nil
+        isLoading = false
+        hasError = true
+        playbackDetail = nil
+        failureReason = detail
+        errorDetail = detail
     }
     
     private func startPositionTracking() {
@@ -161,6 +225,104 @@ class PlayerManager: NSObject, ObservableObject {
         let position = Double(player.time.intValue) / 1000.0 // Convert to seconds
         let duration = Double(player.media?.length.intValue ?? 0) / 1000.0
         PlaybackPositionManager.shared.savePosition(streamId: streamId, position: position, duration: duration)
+    }
+    
+    private func noteFailure(_ reason: String) {
+        guard !suppressStateFailure else { return }
+        let reasonChanged = failureReason != reason
+        if hasError && !reasonChanged { return }
+        
+        timeoutTask?.cancel()
+        isLoading = false
+        hasError = true
+        playbackDetail = nil
+        failureReason = reason
+        startFailureProbeIfNeeded()
+        errorDetail = composedDetail(reason: reason)
+        if reasonChanged {
+            print("DEBUG: VLC → \(reason)")
+            DebugLog.shared.error(reason, source: sourceName, category: "Playback", detail: errorDetail)
+        }
+    }
+    
+    /// Probe only after playback has failed so a one-connection provider is not opened twice at once.
+    private func startFailureProbeIfNeeded() {
+        guard probeTask == nil, let url = currentUrl else { return }
+        if url.isFileURL {
+            probeSummary = FileManager.default.fileExists(atPath: url.path)
+                ? "Local file exists: \(url.path)"
+                : "Local file is missing: \(url.path)"
+            return
+        }
+        
+        let userAgent = currentUserAgent
+        let referrer = currentReferrer
+        probeTask = Task { @MainActor in
+            self.suppressStateFailure = true
+            self.player.stop()
+            await Task.yield()
+            self.suppressStateFailure = false
+            guard !Task.isCancelled, self.currentUrl == url, self.hasError else { return }
+            
+            let report = await StreamProbe.inspect(url: url, userAgent: userAgent, referrer: referrer)
+            guard !Task.isCancelled, self.currentUrl == url, self.hasError else { return }
+            guard report.summary != "Stream check cancelled" else { return }
+            
+            self.probeSummary = report.summary
+            let reason = self.failureReason ?? "Playback failed"
+            self.errorDetail = self.composedDetail(reason: reason)
+            DebugLog.shared.error(
+                "Stream check for \(self.channelName ?? url.lastPathComponent)",
+                source: self.sourceName,
+                category: "Playback",
+                detail: report.summary
+            )
+        }
+    }
+    
+    private func composedDetail(reason: String) -> String {
+        var lines = [reason]
+        lines.append(contentsOf: contextLines())
+        if let probeSummary {
+            lines.append(probeSummary)
+        } else if probeTask != nil {
+            lines.append("Stream check: contacting the server…")
+        }
+        return lines.joined(separator: "\n")
+    }
+    
+    private func contextLines() -> [String] {
+        var lines: [String] = []
+        if let channelName, !channelName.isEmpty {
+            lines.append("Channel: \(channelName)")
+        }
+        if let sourceName, !sourceName.isEmpty {
+            lines.append("Source: \(sourceName)")
+        }
+        if let currentUrl {
+            lines.append("URL: \(DebugLog.redact(currentUrl))")
+        }
+        if let currentUserAgent, !currentUserAgent.isEmpty {
+            lines.append("User-Agent: \(currentUserAgent)")
+        }
+        if let currentReferrer, !currentReferrer.isEmpty {
+            lines.append("Referrer: \(DebugLog.redact(currentReferrer))")
+        }
+        lines.append(ProxySettings.shared.summaryForDebug())
+        return lines
+    }
+    
+    private func vlcStateName(_ state: VLCMediaPlayerState) -> String {
+        switch state {
+        case .stopped: return "stopped"
+        case .opening: return "opening"
+        case .buffering: return "buffering"
+        case .ended: return "ended"
+        case .error: return "error"
+        case .playing: return "playing"
+        case .paused: return "paused"
+        default: return "state \(state.rawValue)"
+        }
     }
     
     func togglePlayPause() {
@@ -260,33 +422,45 @@ extension PlayerManager: VLCMediaPlayerDelegate {
                 debounceTask?.cancel()
                 debounceTask = nil
                 
+                // Keep the failure details on screen while the follow-up stream check runs.
+                if hasError {
+                    break
+                }
+                
                 if !isLoading {
                     isLoading = true
-                    hasError = false // Clear any previous errors
+                    hasError = false
+                    errorDetail = nil
                     print("DEBUG: Loading started")
                 }
                 
             case .error:
-                // Stream encountered an error
-                timeoutTask?.cancel() // Cancel timeout
-                isLoading = false
-                hasError = true
-                print("DEBUG: VLC Error - Stream failed to load")
+                timeoutTask?.cancel()
+                noteFailure("Player reported an error (VLC state: error).")
                 
             case .stopped:
-                // If we were loading and now stopped, it's an error
-                timeoutTask?.cancel() // Cancel timeout
+                timeoutTask?.cancel()
                 if isLoading {
-                    isLoading = false
-                    hasError = true
-                    print("DEBUG: VLC Stopped - Stream failed to load (went from buffering to stopped)")
+                    noteFailure("Player stopped before the stream started (VLC state: stopped).")
                 }
                 
             case .playing:
                 // Successfully playing
-                timeoutTask?.cancel() // Cancel timeout
+                timeoutTask?.cancel()
+                probeTask?.cancel()
+                probeTask = nil
                 isLoading = false
                 hasError = false
+                playbackDetail = nil
+                errorDetail = nil
+                if !announcedPlayback {
+                    announcedPlayback = true
+                    DebugLog.shared.success(
+                        "Playing \(channelName ?? currentUrl?.lastPathComponent ?? "stream")",
+                        source: sourceName,
+                        category: "Playback"
+                    )
+                }
                 
             default:
                 // Debounce stop (wait 0.5s) to prevent flickering on retry loops

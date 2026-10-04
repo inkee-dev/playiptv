@@ -280,7 +280,7 @@ struct DebugWindowView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 6) {
                             if visibleEntries.isEmpty {
-                                Text("No log entries yet. Add or reload a source to see connection attempts.")
+                                Text("No log entries yet. Reload a source or play a channel to see what the app is doing.")
                                     .foregroundStyle(.secondary)
                                     .padding(.vertical, 12)
                             }
@@ -301,7 +301,7 @@ struct DebugWindowView: View {
             }
             .padding(8)
         } label: {
-            Label("Connection log", systemImage: "text.alignleft")
+            Label("Debug log", systemImage: "text.alignleft")
         }
     }
     
