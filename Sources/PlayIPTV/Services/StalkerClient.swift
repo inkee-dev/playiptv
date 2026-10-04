@@ -243,6 +243,7 @@ final class StalkerClient {
     let mac: String
     let login: String?
     let password: String?
+    let sourceName: String
 
     private let timezone: String
     private let serial: String
@@ -253,7 +254,7 @@ final class StalkerClient {
     private var random: String?
     private let cacheKey: String
 
-    init?(portal: String, mac: String, login: String?, password: String?) {
+    init?(portal: String, mac: String, login: String?, password: String?, sourceName: String = "Stalker") {
         guard let portalURL = StalkerLink.portalURL(from: portal),
               let mac = StalkerLink.normalizeMAC(mac) else {
             return nil
@@ -264,6 +265,7 @@ final class StalkerClient {
         self.login = (trimmedLogin?.isEmpty == false) ? trimmedLogin : nil
         let trimmedPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.password = (trimmedPassword?.isEmpty == false) ? trimmedPassword : nil
+        self.sourceName = sourceName
         self.timezone = TimeZone.current.identifier
         self.serial = mac.replacingOccurrences(of: ":", with: "")
         self.deviceID = StalkerLink.sha256(mac)
@@ -286,6 +288,7 @@ final class StalkerClient {
                     portalURL: portalURL,
                     timezone: timezone,
                     token: nil,
+                    sourceName: sourceName,
                     query: [
                         "type": "stb",
                         "action": "handshake",
@@ -296,6 +299,7 @@ final class StalkerClient {
                 guard let dict = js as? [String: Any],
                       let newToken = Self.string(dict, "token"),
                       !newToken.isEmpty else {
+                    DebugLog.log(.warning, "Handshake at \(candidate.path) returned no token", source: sourceName, category: "Stalker")
                     continue
                 }
                 token = newToken
@@ -309,12 +313,19 @@ final class StalkerClient {
                     StalkerSession(apiURL: candidate, token: newToken, random: random),
                     for: cacheKey
                 )
-                print("DEBUG: Stalker authenticated via \(candidate.path)")
+                DebugLog.log(.success, "Authenticated via \(candidate.path)", source: sourceName, category: "Stalker")
                 return
             } catch {
                 token = nil
                 apiURL = nil
                 lastError = error
+                DebugLog.log(
+                    .warning,
+                    "Handshake failed at \(candidate.path)",
+                    source: sourceName,
+                    category: "Stalker",
+                    detail: DebugLog.describe(error)
+                )
             }
         }
         throw lastError
@@ -334,7 +345,7 @@ final class StalkerClient {
         do {
             try await ensureSession()
         } catch {
-            print("DEBUG: Stalker VOD skipped: \(error.localizedDescription)")
+            DebugLog.log(.warning, "VOD catalog skipped: \(DebugLog.describe(error))", source: sourceName, category: "Stalker")
             return StalkerVideoCatalog()
         }
         var catalog = StalkerVideoCatalog()
@@ -554,6 +565,7 @@ final class StalkerClient {
                             portalURL: credentials.portalURL,
                             timezone: credentials.timezone,
                             token: credentials.token,
+                            sourceName: credentials.sourceName,
                             query: query
                         )
                         return (page, Self.pageInfo(js).items)
@@ -627,11 +639,12 @@ final class StalkerClient {
         var mac: String
         var portalURL: URL
         var timezone: String
+        var sourceName: String
     }
 
     private var currentCredentials: Credentials? {
         guard let apiURL, let token else { return nil }
-        return Credentials(apiURL: apiURL, token: token, mac: mac, portalURL: portalURL, timezone: timezone)
+        return Credentials(apiURL: apiURL, token: token, mac: mac, portalURL: portalURL, timezone: timezone, sourceName: sourceName)
     }
 
     private func request(type: String, action: String, query: [String: String] = [:]) async throws -> Any {
@@ -645,11 +658,12 @@ final class StalkerClient {
             portalURL: credentials.portalURL,
             timezone: credentials.timezone,
             token: credentials.token,
+            sourceName: credentials.sourceName,
             query: merged
         )
     }
 
-    private static func get(apiURL: URL, mac: String, portalURL: URL, timezone: String, token: String?, query: [String: String]) async throws -> Any {
+    private static func get(apiURL: URL, mac: String, portalURL: URL, timezone: String, token: String?, sourceName: String, query: [String: String]) async throws -> Any {
         guard var components = URLComponents(url: apiURL, resolvingAgainstBaseURL: false) else {
             throw StalkerError.invalidURL
         }
@@ -666,6 +680,14 @@ final class StalkerClient {
         items.append(URLQueryItem(name: "JsHttpRequest", value: "1-xml"))
         components.queryItems = items
         guard let url = components.url else { throw StalkerError.invalidURL }
+
+        let action = query["action"] ?? "request"
+        let typeName = query["type"] ?? "stb"
+        let page = query["p"]
+        let verbose = page == nil || page == "1" || action == "handshake" || action == "get_profile" || action == "do_auth" || action == "create_link"
+        if verbose {
+            DebugLog.log(.info, "GET \(typeName)/\(action) \(DebugLog.redact(url))", source: sourceName, category: "Stalker")
+        }
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -685,35 +707,46 @@ final class StalkerClient {
         do {
             (data, response) = try await NetworkSession.shared.data(for: request)
         } catch {
+            DebugLog.log(.error, DebugLog.describe(error), source: sourceName, category: "Stalker", detail: "\(typeName)/\(action)")
             throw StalkerError.networkError(error.localizedDescription)
         }
         guard let http = response as? HTTPURLResponse else {
             throw StalkerError.networkError("No response from the portal")
         }
+        if verbose {
+            DebugLog.log(.info, "HTTP \(http.statusCode) · \(data.count) bytes for \(typeName)/\(action)", source: sourceName, category: "Stalker")
+        }
         if http.statusCode == 401 || http.statusCode == 403 {
+            DebugLog.log(.error, "HTTP \(http.statusCode) for \(typeName)/\(action)", source: sourceName, category: "Stalker", detail: DebugLog.preview(data))
             throw StalkerError.authenticationFailed
         }
         guard (200...299).contains(http.statusCode) else {
+            DebugLog.log(.error, "HTTP \(http.statusCode) for \(typeName)/\(action)", source: sourceName, category: "Stalker", detail: DebugLog.preview(data))
             throw StalkerError.networkError("Portal returned HTTP \(http.statusCode)")
         }
         guard let json = parseJSON(data) as? [String: Any] else {
+            DebugLog.log(.error, "Could not parse \(typeName)/\(action) JSON", source: sourceName, category: "Stalker", detail: DebugLog.preview(data))
             throw StalkerError.decodingError
         }
         if json["js"] == nil || json["js"] is NSNull {
             throw StalkerError.decodingError
         }
         if let rejected = json["js"] as? Bool, rejected == false {
+            DebugLog.log(.warning, "Portal rejected \(typeName)/\(action)", source: sourceName, category: "Stalker", detail: DebugLog.preview(data))
             throw StalkerError.requestRejected
         }
         if let rejected = json["js"] as? Int, rejected == 0 {
+            DebugLog.log(.warning, "Portal rejected \(typeName)/\(action)", source: sourceName, category: "Stalker", detail: DebugLog.preview(data))
             throw StalkerError.requestRejected
         }
         if let rejected = json["js"] as? String, rejected.isEmpty {
+            DebugLog.log(.warning, "Portal rejected \(typeName)/\(action)", source: sourceName, category: "Stalker", detail: DebugLog.preview(data))
             throw StalkerError.requestRejected
         }
         if let dict = json["js"] as? [String: Any], let error = dict["error"] as? String {
             let lowered = error.lowercased()
             if lowered.contains("auth") || lowered.contains("token") {
+                DebugLog.log(.error, error, source: sourceName, category: "Stalker", detail: "\(typeName)/\(action)")
                 throw StalkerError.authenticationFailed
             }
         }

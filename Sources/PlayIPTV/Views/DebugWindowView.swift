@@ -122,7 +122,7 @@ struct DebugWindowView: View {
         let movies = content?.channels.filter { $0.categoryId == "vod_all" }.count ?? 0
         let series = content?.channels.filter { $0.categoryId == "series_all" }.count ?? 0
         let total = content?.channels.count ?? 0
-        let endpoint = source.type == .m3u ? source.m3uUrl : source.xtreamUrl
+        let endpoint = connectionEndpoint(for: source)
         
         return HStack(alignment: .top, spacing: 10) {
             statusDot(loading: loading, error: error, total: total)
@@ -132,7 +132,7 @@ struct DebugWindowView: View {
                 HStack(spacing: 8) {
                     Text(source.name)
                         .fontWeight(.semibold)
-                    Text(source.type == .m3u ? "M3U" : "Xtream")
+                    Text(typeLabel(source.type))
                         .font(.caption)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
@@ -146,6 +146,13 @@ struct DebugWindowView: View {
                 
                 if let endpoint {
                     Text(DebugLog.redact(endpoint))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                
+                if let identity = stalkerIdentity(source) {
+                    Text(identity)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
@@ -184,6 +191,36 @@ struct DebugWindowView: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 4)
+    }
+    
+    private func typeLabel(_ type: StreamType) -> String {
+        switch type {
+        case .m3u: return "M3U"
+        case .xtream: return "Xtream"
+        case .stalker: return "Stalker"
+        }
+    }
+    
+    private func connectionEndpoint(for source: Source) -> String? {
+        switch source.type {
+        case .m3u: return source.m3uUrl
+        case .xtream: return source.xtreamUrl
+        case .stalker: return source.stalkerUrl
+        }
+    }
+    
+    private func stalkerIdentity(_ source: Source) -> String? {
+        guard source.type == .stalker else { return nil }
+        var parts: [String] = []
+        if let mac = source.stalkerMac, !mac.isEmpty {
+            parts.append("MAC \(mac)")
+        }
+        if let login = source.stalkerLogin, !login.isEmpty {
+            parts.append("Login \(login)")
+        } else {
+            parts.append("No portal login")
+        }
+        return parts.joined(separator: "  ·  ")
     }
     
     private func statusDot(loading: Bool, error: String?, total: Int) -> some View {

@@ -106,7 +106,7 @@ final class DebugLog: ObservableObject {
             if let items = components.queryItems {
                 components.queryItems = items.map { item in
                     let name = item.name.lowercased()
-                    if name == "password" || name == "pass" || name == "pwd" {
+                    if name == "password" || name == "pass" || name == "pwd" || name == "token" {
                         return URLQueryItem(name: item.name, value: "•••")
                     }
                     return item
