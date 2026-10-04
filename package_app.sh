@@ -34,15 +34,18 @@ build_for_arch() {
     echo "🚀 Starting build for architecture: $ARCH"
     echo "========================================"
 
-    # output specific to arch
-    BUILD_PATH=".build/${ARCH}-apple-macosx/release"
-    
     echo "🔨 Compiling..."
-    swift build -c release --arch "$ARCH"
-
-    if [ $? -ne 0 ]; then
+    if ! swift build -c release --arch "$ARCH"; then
         echo "❌ Build failed for $ARCH."
         return 1
+    fi
+
+    # Current Swift toolchains (the Swift build system) place products under
+    # .build/out/Products/Release, not .build/<triple>/release.
+    BUILD_PATH=$(swift build -c release --arch "$ARCH" --show-bin-path 2>/dev/null | tail -n 1)
+    BUILD_PATH=${BUILD_PATH%$'\r'}
+    if [ -z "$BUILD_PATH" ] || [ ! -f "$BUILD_PATH/$APP_NAME" ]; then
+        BUILD_PATH=".build/${ARCH}-apple-macosx/release"
     fi
 
     echo "📦 Creating $APP_NAME.app bundle for $ARCH..."
@@ -67,12 +70,10 @@ build_for_arch() {
         return 1
     fi
 
-    # Copy Frameworks (VLCKit)
-    # Find VLCKit.framework in specific arch build dir
-    VLCKIT_PATH=$(find .build/${ARCH}-apple-macosx -name "VLCKit.framework" -type d | grep "release" | head -n 1)
-    
+    # Copy Frameworks (VLCKit). Prefer the macOS slice inside the downloaded xcframework.
+    VLCKIT_PATH=$(find .build -path '*macos*' -name "VLCKit.framework" -type d | head -n 1)
     if [ -z "$VLCKIT_PATH" ]; then
-         echo "⚠️ Warning: VLCKit.framework not found in specific path. Searching broader..."
+         echo "⚠️ Warning: macOS VLCKit.framework not found. Searching broader..."
          VLCKIT_PATH=$(find .build -name "VLCKit.framework" -type d | head -n 1)
     fi
 
