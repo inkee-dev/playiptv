@@ -25,7 +25,7 @@ class PlayerManager: NSObject, ObservableObject {
     
     // MARK: - Playback Control
     
-    func play(url: URL, streamId: String? = nil, startPosition: Double? = nil, force: Bool = false) {
+    func play(url: URL, streamId: String? = nil, startPosition: Double? = nil, force: Bool = false, userAgent: String? = nil, referrer: String? = nil) {
         if !force && currentUrl == url && player.isPlaying {
             print("DEBUG: VLC → Already playing \(url.lastPathComponent)")
             return
@@ -53,6 +53,12 @@ class PlayerManager: NSObject, ObservableObject {
         }
         
         let media = VLCMedia(url: url)
+        if let userAgent, !userAgent.isEmpty {
+            media.addOption(":http-user-agent=\(userAgent)")
+        }
+        if let referrer, !referrer.isEmpty {
+            media.addOption(":http-referrer=\(referrer)")
+        }
         
         // Use Task to prevent blocking UI during VLC network operations
         // VLC operations must stay on MainActor but Task makes them async

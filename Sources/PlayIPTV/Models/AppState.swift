@@ -385,6 +385,22 @@ class AppState {
                     xtreamPass: nil,
                     epgUrl: sourceDict["epgUrl"]
                 )
+            } else if typeString == "stalker" {
+                guard let url = sourceDict["stalkerUrl"] ?? sourceDict["portalUrl"],
+                      let mac = sourceDict["mac"] ?? sourceDict["stalkerMac"] else {
+                    print("DEBUG: Skipping invalid Stalker source: \(name)")
+                    continue
+                }
+
+                debugSource = Source(
+                    name: name,
+                    type: .stalker,
+                    epgUrl: sourceDict["epgUrl"],
+                    stalkerUrl: url,
+                    stalkerMac: mac,
+                    stalkerLogin: sourceDict["username"] ?? sourceDict["login"],
+                    stalkerPassword: sourceDict["password"]
+                )
             } else {
                 print("DEBUG: Unknown source type: \(typeString)")
                 continue
@@ -742,6 +758,8 @@ class AppState {
             newContent = await loadM3U(source: source)
         case .xtream:
             newContent = await loadXtream(source: source)
+        case .stalker:
+            newContent = await loadStalker(source: source)
         }
         
         await MainActor.run {
@@ -840,15 +858,66 @@ class AppState {
         }
     }
     
+    private func loadStalker(source: Source) async -> SourceContent {
+        guard let urlStr = source.stalkerUrl,
+              let mac = source.stalkerMac,
+              let client = StalkerClient(portal: urlStr, mac: mac, login: source.stalkerLogin, password: source.stalkerPassword) else {
+            await MainActor.run { errorMessage = "Invalid Stalker portal URL or MAC address for \(source.name)" }
+            return SourceContent()
+        }
+
+        do {
+            try await client.authenticate()
+            let live = (try? await client.fetchLiveChannels()) ?? []
+            let video = await client.fetchVideoCatalog()
+            StalkerEpisodeStore.shared.replace(sourceId: source.id, episodes: video.episodes)
+
+            func tagged(_ channels: [Channel], categoryId: String, group: String) -> [Channel] {
+                channels.map { channel in
+                    Channel(
+                        sourceId: source.id,
+                        streamId: channel.streamId,
+                        name: channel.name,
+                        logoUrl: channel.logoUrl,
+                        streamUrl: channel.streamUrl,
+                        categoryId: categoryId,
+                        groupTitle: group,
+                        isSeries: channel.isSeries
+                    )
+                }
+            }
+
+            var categories: [Category] = []
+            var channels: [Channel] = []
+            if !live.isEmpty {
+                categories.append(Category(id: "live_all", name: "Live TV", type: .live))
+                channels += tagged(live, categoryId: "live_all", group: "Live")
+            }
+            if !video.movies.isEmpty {
+                categories.append(Category(id: "vod_all", name: "Movies", type: .movie))
+                channels += tagged(video.movies, categoryId: "vod_all", group: "Movies")
+            }
+            if !video.series.isEmpty {
+                categories.append(Category(id: "series_all", name: "Series", type: .series))
+                channels += tagged(video.series, categoryId: "series_all", group: "Series")
+            }
+
+            if channels.isEmpty {
+                await MainActor.run { errorMessage = "The Stalker portal returned no content for \(source.name)" }
+            }
+            print("DEBUG: Stalker \(source.name) loaded \(live.count) live, \(video.movies.count) movies, \(video.series.count) series")
+            return SourceContent(channels: channels, categories: categories)
+        } catch {
+            print("ERROR: Stalker load failed for \(source.name): \(error)")
+            await MainActor.run { errorMessage = error.localizedDescription }
+            return SourceContent()
+        }
+    }
+
     // Fetch episodes for a series
     func fetchEpisodesForSeries(_ channel: Channel) async {
         guard channel.isSeries,
-              let source = sources.first(where: { $0.id == channel.sourceId }),
-              source.type == .xtream,
-              let urlStr = source.xtreamUrl,
-              let user = source.xtreamUser,
-              let pass = source.xtreamPass,
-              let client = XtreamClient(url: urlStr, username: user, password: pass) else {
+              let source = sources.first(where: { $0.id == channel.sourceId }) else {
             return
         }
         
@@ -858,9 +927,33 @@ class AppState {
         }
         
         do {
-            let seriesInfo = try await client.fetchSeriesInfo(seriesId: channel.streamId)
+            let episodes: [Episode]
+            switch source.type {
+            case .xtream:
+                guard let urlStr = source.xtreamUrl,
+                      let user = source.xtreamUser,
+                      let pass = source.xtreamPass,
+                      let client = XtreamClient(url: urlStr, username: user, password: pass) else {
+                    throw XtreamError.invalidURL
+                }
+                episodes = try await client.fetchSeriesInfo(seriesId: channel.streamId).episodes
+            case .stalker:
+                if let cached = StalkerEpisodeStore.shared.episodes(sourceId: source.id, seriesId: channel.streamId) {
+                    episodes = cached
+                } else if let portal = source.stalkerUrl,
+                          let mac = source.stalkerMac,
+                          let client = StalkerClient(portal: portal, mac: mac, login: source.stalkerLogin, password: source.stalkerPassword) {
+                    let fetched = await client.episodesForSeries(id: channel.streamId, playURL: channel.streamUrl)
+                    StalkerEpisodeStore.shared.store(sourceId: source.id, seriesId: channel.streamId, episodes: fetched)
+                    episodes = fetched
+                } else {
+                    episodes = []
+                }
+            case .m3u:
+                episodes = []
+            }
             await MainActor.run {
-                episodesForSeries = seriesInfo.episodes
+                episodesForSeries = episodes
                 isLoadingEpisodes = false
             }
         } catch {
@@ -962,6 +1055,8 @@ class AppState {
     
     // MARK: - Playback Authority
     
+    private var playbackGeneration = 0
+
     private var activeChannel: Channel? {
         selectedChannel
     }
@@ -979,12 +1074,51 @@ class AppState {
     }
     
     func playChannel(_ channel: Channel, startPosition: Double?) {
-        PlayerManager.shared.play(
-            url: channel.streamUrl,
-            streamId: channel.streamId,
-            startPosition: startPosition,
-            force: false
-        )
+        playbackGeneration += 1
+        let generation = playbackGeneration
+        guard let stalkerLink = StalkerLink.parse(channel.streamUrl) else {
+            PlayerManager.shared.play(
+                url: channel.streamUrl,
+                streamId: channel.streamId,
+                startPosition: startPosition,
+                force: false
+            )
+            return
+        }
+
+        PlayerManager.shared.isLoading = true
+        PlayerManager.shared.hasError = false
+        Task {
+            guard let source = sources.first(where: { $0.id == channel.sourceId }),
+                  let portal = source.stalkerUrl,
+                  let mac = source.stalkerMac,
+                  let client = StalkerClient(portal: portal, mac: mac, login: source.stalkerLogin, password: source.stalkerPassword) else {
+                guard playbackGeneration == generation else { return }
+                PlayerManager.shared.isLoading = false
+                PlayerManager.shared.hasError = true
+                errorMessage = "Missing Stalker portal credentials"
+                return
+            }
+
+            do {
+                let url = try await client.resolveLink(type: stalkerLink.type, cmd: stalkerLink.cmd, series: stalkerLink.series)
+                guard playbackGeneration == generation else { return }
+                PlayerManager.shared.play(
+                    url: url,
+                    streamId: channel.streamId,
+                    startPosition: startPosition,
+                    force: false,
+                    userAgent: StalkerLink.playbackUserAgent,
+                    referrer: portal
+                )
+            } catch {
+                guard playbackGeneration == generation else { return }
+                print("ERROR: Stalker link failed: \(error.localizedDescription)")
+                PlayerManager.shared.isLoading = false
+                PlayerManager.shared.hasError = true
+                errorMessage = error.localizedDescription
+            }
+        }
     }
     
     // MARK: - EPG Auto-Refresh

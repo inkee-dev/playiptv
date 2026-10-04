@@ -13,7 +13,13 @@
       "username": "test",
       "password": "test",
       "epgUrl": "http://localhost:8000/xmltv.php"
-    }
+    },
+    {
+      "name": "local source - stalker",
+      "type": "stalker",
+      "stalkerUrl": "http://localhost:8080/stalker_portal/c/",
+      "mac": "00:1A:79:00:00:00"
+    },
     {
       "name": "Auto-Update Test Source",
       "type": "m3u",

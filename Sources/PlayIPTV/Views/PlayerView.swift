@@ -201,6 +201,7 @@ struct MediaControlsView: View {
         }
         
         let episodeChannel = Channel(
+            sourceId: series.sourceId,
             streamId: episode.id,
             name: episode.title ?? "Episode \(episode.episodeNum)",
             logoUrl: series.logoUrl,

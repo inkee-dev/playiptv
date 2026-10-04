@@ -24,12 +24,20 @@ cp debug-config.json.example debug-config.json
       "name": "My M3U Playlist",
       "type": "m3u",
       "m3uUrl": "https://example.com/playlist.m3u"
+    },
+    {
+      "name": "My Stalker Portal",
+      "type": "stalker",
+      "stalkerUrl": "http://example.com/stalker_portal/c/",
+      "mac": "00:1A:79:00:00:00",
+      "username": "optional-login",
+      "password": "optional-password"
     }
   ]
 }
 ```
 
-You can have multiple sources of either type. Just add/remove objects from the `sources` array.
+You can have multiple M3U, Xtream, or Stalker sources. Just add/remove objects from the `sources` array. For a Stalker portal, `username` and `password` are optional and only needed when the portal asks for a login in addition to the MAC address.
 
 3. Run the app - all your sources will be automatically loaded!
 

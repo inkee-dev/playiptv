@@ -3,6 +3,15 @@ import Foundation
 enum StreamType: String, Codable {
     case m3u
     case xtream
+    case stalker
+
+    var displayName: String {
+        switch self {
+        case .m3u: return "M3U Playlist"
+        case .xtream: return "Xtream Codes"
+        case .stalker: return "Stalker Portal"
+        }
+    }
 }
 
 enum CategoryType: String, CaseIterable, Identifiable {
@@ -79,10 +88,21 @@ struct Source: Identifiable, Hashable, Codable {
     // EPG
     var epgUrl: String?
     var epgRefreshInterval: String? // Stores EPGRefreshInterval rawValue
+
+    // Stalker / Ministra portal
+    var stalkerUrl: String? = nil
+    var stalkerMac: String? = nil
+    var stalkerLogin: String? = nil
+    var stalkerPassword: String? = nil
     
     var url: URL? {
-        if type == .m3u, let str = m3uUrl { return URL(string: str) }
-        if type == .xtream, let str = xtreamUrl { return URL(string: str) }
-        return nil
+        switch type {
+        case .m3u:
+            return m3uUrl.flatMap { URL(string: $0) }
+        case .xtream:
+            return xtreamUrl.flatMap { URL(string: $0) }
+        case .stalker:
+            return stalkerUrl.flatMap { URL(string: $0) }
+        }
     }
 }

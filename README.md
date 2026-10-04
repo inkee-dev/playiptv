@@ -1,13 +1,13 @@
 # PlayIPTV
 
-**PlayIPTV** is a modern, native macOS application designed for a premium IPTV experience. Built with SwiftUI and VLCKit, it supports both Xtream Codes and M3U playlists, offering a seamless and responsive interface for Live TV, Series, and Movies.
+**PlayIPTV** is a modern, native macOS application designed for a premium IPTV experience. Built with SwiftUI and VLCKit, it supports Xtream Codes, M3U playlists, and Stalker/Ministra portals, offering a seamless and responsive interface for Live TV, Series, and Movies.
 
 ---
 
 ## ✨ Features
 
 ### 📺 Content Support
--   **Xtream Codes & M3U:** Full support for both major IPTV formats.
+-   **Xtream Codes, M3U, and Stalker Portal:** Connect a playlist, an Xtream server, or a Stalker/Ministra portal.
 -   **Live TV:** Fast channel switching and category management.
 -   **VOD (Series & Movies):** Dedicated browser for on-demand content with rich metadata.
 -   **M3U Flattening:** Automatically organizes messy M3U lists into a clean "Live TV" structure.

@@ -105,6 +105,7 @@ struct EpisodeListView: View {
         
         // Create a temporary channel for the episode
         let episodeChannel = Channel(
+            sourceId: series.sourceId,
             streamId: episode.id,
             name: "\(series.name) - S\(episode.seasonNum)E\(episode.episodeNum)",
             logoUrl: series.logoUrl,

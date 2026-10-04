@@ -133,7 +133,7 @@ struct SourceSettingsView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(source.name)
                                     .font(.headline)
-                                Text(source.type == .m3u ? "M3U Playlist" : "Xtream Codes")
+                                Text(source.type.displayName)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 
@@ -306,6 +306,10 @@ struct AddSourceView: View {
     @State private var xtreamUrl: String = ""
     @State private var xtreamUsername: String = ""
     @State private var xtreamPassword: String = ""
+    @State private var stalkerUrl: String = ""
+    @State private var stalkerMac: String = ""
+    @State private var stalkerLogin: String = ""
+    @State private var stalkerPassword: String = ""
     @State private var epgUrl: String = ""
     @State private var epgRefreshInterval: String = AppState.EPGRefreshInterval.twentyFourHours.rawValue
     @FocusState private var isNameFieldFocused: Bool
@@ -325,11 +329,13 @@ struct AddSourceView: View {
             Picker("", selection: $sourceType) {
                 Text("M3U Playlist").tag(StreamType.m3u)
                 Text("Xtream Codes").tag(StreamType.xtream)
+                Text("Stalker Portal").tag(StreamType.stalker)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             
-            if sourceType == .m3u {
+            switch sourceType {
+            case .m3u:
                 VStack(alignment: .leading, spacing: 4) {
                     Text("M3U URL")
                         .font(.caption)
@@ -337,27 +343,63 @@ struct AddSourceView: View {
                     TextField("", text: $m3uUrl)
                         .lineLimit(1)
                 }
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Server URL")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    TextField("", text: $xtreamUrl)
-                        .lineLimit(1)
+            case .xtream:
+                Group {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Server URL")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        TextField("", text: $xtreamUrl)
+                            .lineLimit(1)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Username")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        TextField("", text: $xtreamUsername)
+                            .lineLimit(1)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Password")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        SecureField("", text: $xtreamPassword)
+                            .lineLimit(1)
+                    }
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Username")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    TextField("", text: $xtreamUsername)
-                        .lineLimit(1)
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Password")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    SecureField("", text: $xtreamPassword)
-                        .lineLimit(1)
+            case .stalker:
+                Group {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Portal URL")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        TextField("http://example.com/stalker_portal/c/", text: $stalkerUrl)
+                            .lineLimit(1)
+                        Text("The Stalker or Ministra portal address, usually ending in /c/")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("MAC Address")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        TextField("00:1A:79:00:00:00", text: $stalkerMac)
+                            .lineLimit(1)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Login (optional)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        TextField("", text: $stalkerLogin)
+                            .lineLimit(1)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Password (optional)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        SecureField("", text: $stalkerPassword)
+                            .lineLimit(1)
+                    }
                 }
             }
             
@@ -413,7 +455,7 @@ struct AddSourceView: View {
             }
         }
         .padding(20)
-        .frame(minWidth: 400, maxWidth: 500)
+        .frame(minWidth: 460, maxWidth: 560)
         .onAppear {
             isNameFieldFocused = true
         }
@@ -428,8 +470,11 @@ struct AddSourceView: View {
             return false
         }
         
-        if sourceType == .m3u {
-            // Validate M3U URL
+        let trimmedEpg = epgUrl.isEmpty ? nil : epgUrl.trimmingCharacters(in: .whitespaces)
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+
+        switch sourceType {
+        case .m3u:
             guard !m3uUrl.trimmingCharacters(in: .whitespaces).isEmpty else {
                 validationError = "M3U URL is required"
                 return false
@@ -441,16 +486,14 @@ struct AddSourceView: View {
                 return false
             }
             
-            let source = Source(
-                name: name.trimmingCharacters(in: .whitespaces),
+            appState.addSource(Source(
+                name: trimmedName,
                 type: .m3u,
                 m3uUrl: m3uUrl.trimmingCharacters(in: .whitespaces),
-                epgUrl: epgUrl.isEmpty ? nil : epgUrl.trimmingCharacters(in: .whitespaces),
+                epgUrl: trimmedEpg,
                 epgRefreshInterval: epgRefreshInterval
-            )
-            appState.addSource(source)
-        } else {
-            // Validate Xtream fields
+            ))
+        case .xtream:
             guard !xtreamUrl.trimmingCharacters(in: .whitespaces).isEmpty else {
                 validationError = "Server URL is required"
                 return false
@@ -472,16 +515,39 @@ struct AddSourceView: View {
                 return false
             }
             
-            let source = Source(
-                name: name.trimmingCharacters(in: .whitespaces),
+            appState.addSource(Source(
+                name: trimmedName,
                 type: .xtream,
                 xtreamUrl: xtreamUrl.trimmingCharacters(in: .whitespaces),
                 xtreamUser: xtreamUsername.trimmingCharacters(in: .whitespaces),
                 xtreamPass: xtreamPassword,
-                epgUrl: epgUrl.isEmpty ? nil : epgUrl.trimmingCharacters(in: .whitespaces),
+                epgUrl: trimmedEpg,
                 epgRefreshInterval: epgRefreshInterval
-            )
-            appState.addSource(source)
+            ))
+        case .stalker:
+            guard let portal = StalkerLink.portalURL(from: stalkerUrl) else {
+                validationError = "Portal URL is required"
+                return false
+            }
+            guard let mac = StalkerLink.normalizeMAC(stalkerMac) else {
+                validationError = "Enter a valid MAC address, for example 00:1A:79:00:00:00"
+                return false
+            }
+            if stalkerLogin.trimmingCharacters(in: .whitespaces).isEmpty && !stalkerPassword.isEmpty {
+                validationError = "Login is required when a password is set"
+                return false
+            }
+            let login = stalkerLogin.trimmingCharacters(in: .whitespaces)
+            appState.addSource(Source(
+                name: trimmedName,
+                type: .stalker,
+                epgUrl: trimmedEpg,
+                epgRefreshInterval: epgRefreshInterval,
+                stalkerUrl: portal.absoluteString,
+                stalkerMac: mac,
+                stalkerLogin: login.isEmpty ? nil : login,
+                stalkerPassword: stalkerPassword.isEmpty ? nil : stalkerPassword
+            ))
         }
         
         return true
