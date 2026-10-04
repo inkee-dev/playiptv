@@ -20,7 +20,16 @@ let package = Package(
             dependencies: [
                 .product(name: "VLCKitSPM", package: "vlckit-spm")
             ],
-            path: "Sources/PlayIPTV"
+            path: "Sources/PlayIPTV",
+            exclude: ["Info.plist"],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "\(Context.packageDirectory)/Sources/PlayIPTV/Info.plist"
+                ])
+            ]
         )
     ]
 )

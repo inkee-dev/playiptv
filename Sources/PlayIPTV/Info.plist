@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>PlayIPTV</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.example.PlayIPTV</string>
+	<key>CFBundleName</key>
+	<string>PlayIPTV</string>
+	<key>CFBundleDisplayName</key>
+	<string>PlayIPTV</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.0.0</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!--
+	  Only NSAllowsArbitraryLoads. Do NOT also set NSAllowsLocalNetworking /
+	  NSAllowsArbitraryLoadsForMedia / NSAllowsArbitraryLoadsInWebContent —
+	  on macOS 10.12+ those keys cause NSAllowsArbitraryLoads to be ignored,
+	  so remote http:// IPTV servers stay blocked.
+	-->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

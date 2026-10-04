@@ -253,16 +253,6 @@ final class StalkerClient {
     private var random: String?
     private let cacheKey: String
 
-    private static let session: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 30
-        configuration.timeoutIntervalForResource = 60
-        configuration.httpShouldSetCookies = false
-        configuration.httpCookieAcceptPolicy = .never
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: configuration)
-    }()
-
     init?(portal: String, mac: String, login: String?, password: String?) {
         guard let portalURL = StalkerLink.portalURL(from: portal),
               let mac = StalkerLink.normalizeMAC(mac) else {
@@ -693,7 +683,7 @@ final class StalkerClient {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await NetworkSession.shared.data(for: request)
         } catch {
             throw StalkerError.networkError(error.localizedDescription)
         }

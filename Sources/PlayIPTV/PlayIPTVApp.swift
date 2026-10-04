@@ -44,12 +44,16 @@ struct PlayIPTVApp: App {
                 }
                 .keyboardShortcut("f", modifiers: [])
             }
+            
+            DebugCommands()
         }
         
-        Settings {
-            SettingsView(appState: appState)
+        Window("Connection Debug", id: "debug") {
+            DebugWindowView(appState: appState)
                 .environment(appState)
         }
+        .defaultSize(width: 760, height: 580)
+        .windowResizability(.contentMinSize)
         
         Settings {
             SettingsView(appState: appState)

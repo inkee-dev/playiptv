@@ -23,31 +23,78 @@ struct SettingsView: View {
                 }
                 .tag(AppState.SettingsTab.about)
         }
-        .frame(width: 500, height: 400)
+        .frame(width: 500, height: 520)
     }
 }
 
 struct GeneralSettingsView: View {
     @Bindable var appState: AppState
     @ObservedObject private var epgManager = EPGManager.shared
+    @ObservedObject private var proxySettings = ProxySettings.shared
     @Environment(\.openWindow) private var openWindow
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            GroupBox(label: Label("Appearance", systemImage: "paintpalette")) {
-                VStack(alignment: .leading) {
-                    Picker("Theme", selection: $appState.theme) {
-                        ForEach(AppState.AppTheme.allCases) { theme in
-                            Text(theme.rawValue).tag(theme)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                GroupBox(label: Label("Appearance", systemImage: "paintpalette")) {
+                    VStack(alignment: .leading) {
+                        Picker("Theme", selection: $appState.theme) {
+                            ForEach(AppState.AppTheme.allCases) { theme in
+                                Text(theme.rawValue).tag(theme)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+                    .padding()
+                }
+                
+                GroupBox(label: Label("Network Proxy", systemImage: "network")) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("Use proxy", isOn: $proxySettings.enabled)
+                        
+                        Text("Routes source loading, EPG, and stream playback through the proxy.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        
+                        if proxySettings.enabled {
+                            Picker("Type", selection: $proxySettings.type) {
+                                ForEach(ProxyType.allCases) { type in
+                                    Text(type.rawValue).tag(type)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            
+                            HStack(spacing: 8) {
+                                TextField("Host", text: $proxySettings.host)
+                                    .textFieldStyle(.roundedBorder)
+                                TextField("Port", text: $proxySettings.port)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 72)
+                            }
+                            
+                            HStack(spacing: 8) {
+                                TextField("Username (optional)", text: $proxySettings.username)
+                                    .textFieldStyle(.roundedBorder)
+                                SecureField("Password", text: $proxySettings.password)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+                            
+                            if proxySettings.isActive {
+                                Text("Active: \(proxySettings.summaryForDebug())")
+                                    .font(.caption)
+                                    .foregroundStyle(.green)
+                            } else {
+                                Text("Enter host and port to enable.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
+                    .padding()
                 }
-                .padding()
-            }
-            
-            GroupBox(label: Label("EPG (Electronic Program Guide)", systemImage: "list.bullet.rectangle")) {
+                
+                GroupBox(label: Label("EPG (Electronic Program Guide)", systemImage: "list.bullet.rectangle")) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Configure an XMLTV EPG source to display current programs for Live TV channels.")
                         .font(.caption)
@@ -111,16 +158,16 @@ struct GeneralSettingsView: View {
                 }
                 .padding()
             }
-            
-            Spacer()
+            }
+            .padding()
         }
-        .padding()
     }
 }
 
 struct SourceSettingsView: View {
     @Bindable var appState: AppState
     @ObservedObject private var epgManager = EPGManager.shared
+    @Environment(\.openWindow) private var openWindow
     @State private var showingAddSource = false
     @State private var editingSource: Source?
     
@@ -180,6 +227,14 @@ struct SourceSettingsView: View {
                                     }
                                     .padding(.top, 2)
                                     
+                                    if let error = appState.sourceLoadErrors[source.id] {
+                                        Text(error)
+                                            .font(.caption2)
+                                            .foregroundStyle(.orange)
+                                            .lineLimit(2)
+                                            .padding(.top, 2)
+                                    }
+                                    
                                     // EPG Status
                                     if source.epgUrl != nil {
                                         HStack(spacing: 6) {
@@ -234,8 +289,17 @@ struct SourceSettingsView: View {
                             
                             // Status Icon
                             if !appState.loadingSources.contains(source.id) {
-                                Image(systemName: "checkmark.circle")
-                                    .foregroundStyle(.secondary.opacity(0.5))
+                                if let error = appState.sourceLoadErrors[source.id] {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.orange)
+                                        .help(error)
+                                } else if (appState.sourceContent[source.id]?.channels.isEmpty ?? true) {
+                                    Image(systemName: "questionmark.circle")
+                                        .foregroundStyle(.secondary.opacity(0.5))
+                                } else {
+                                    Image(systemName: "checkmark.circle")
+                                        .foregroundStyle(.secondary.opacity(0.5))
+                                }
                             }
                         }
                         .contextMenu {
@@ -278,8 +342,14 @@ struct SourceSettingsView: View {
                 
                 Spacer()
                 
-                // Placeholder for symmetry or Delete button if we added selection state to the list
-                Color.clear.frame(width: 20, height: 20)
+                Button(action: {
+                    openWindow(id: "debug")
+                }) {
+                    Image(systemName: "ant")
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.borderless)
+                .help("Connection Debug")
             }
             .padding(.horizontal)
             .padding(.vertical, 8)

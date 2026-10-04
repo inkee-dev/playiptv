@@ -59,6 +59,9 @@ class PlayerManager: NSObject, ObservableObject {
         if let referrer, !referrer.isEmpty {
             media.addOption(":http-referrer=\(referrer)")
         }
+        for option in ProxySettings.shared.vlcMediaOptions() {
+            media.addOption(option)
+        }
         
         // Use Task to prevent blocking UI during VLC network operations
         // VLC operations must stay on MainActor but Task makes them async

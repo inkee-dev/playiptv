@@ -48,6 +48,11 @@ struct ChannelGridView: View {
                 gridView
             }
         }
+        .overlay {
+            if !appState.showingEpisodeList && appState.filteredChannels.isEmpty {
+                emptyListOverlay
+            }
+        }
         .navigationTitle(appState.showingEpisodeList ? "" : (appState.selectedCategory?.name ?? "All Channels"))
         .searchable(text: $appState.channelSearchText, placement: .toolbar, prompt: "Search channels...")
         .onChange(of: appState.selectedCategory) { oldValue, newValue in
@@ -195,6 +200,36 @@ struct ChannelGridView: View {
             }
             .background(contentBackgroundColor)
         }
+    }
+    
+    private var emptyListOverlay: some View {
+        let diagnosis = appState.listDiagnosis
+        return VStack(spacing: 12) {
+            if diagnosis.isLoading {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: diagnosis.isError ? "exclamationmark.triangle" : "tray")
+                    .font(.system(size: 28))
+                    .foregroundStyle(diagnosis.isError ? .orange : .secondary)
+            }
+            
+            Text(diagnosis.title)
+                .font(.headline)
+                .multilineTextAlignment(.center)
+            
+            Text(diagnosis.detail)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 320)
+            
+            Button("Open Connection Debug") {
+                openWindow(id: "debug")
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(24)
     }
     
     private func handleChannelTap(_ channel: Channel) {

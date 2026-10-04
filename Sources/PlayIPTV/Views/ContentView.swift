@@ -137,6 +137,14 @@ struct ContentView: View {
                     .pickerStyle(.segmented)
                     .fixedSize()
                     
+                    // Debug
+                    Button(action: {
+                        openWindow(id: "debug")
+                    }) {
+                        Label("Debug", systemImage: "ant")
+                    }
+                    .help("Connection Debug")
+                    
                     // Settings
                     Button(action: {
                         openSettings()
