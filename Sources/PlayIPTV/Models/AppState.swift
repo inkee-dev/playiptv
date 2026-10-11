@@ -282,13 +282,7 @@ class AppState {
                 }
             }
             
-            // Load per-source EPG for each source
-            for source in sources {
-                if let sourceEpg = source.epgUrl, !sourceEpg.isEmpty {
-                    await EPGManager.shared.loadEPG(for: source.id, from: sourceEpg)
-                }
-            }
-            
+            // Per-source EPG is loaded inside loadSource, including links detected from the provider.
             
             // Force UI update immediately after loading EPG
             await MainActor.run {
@@ -1016,6 +1010,62 @@ class AppState {
             }
             updateFilteredChannels()
         }
+
+        var loadedGuide = false
+        if let guide = sources.first(where: { $0.id == source.id })?.epgUrl, !guide.isEmpty {
+            discoveredEPG.removeValue(forKey: source.id)
+            await EPGManager.shared.loadEPG(for: source.id, from: guide)
+            loadedGuide = EPGManager.shared.sourceErrors[source.id] == nil
+        } else if let found = discoveredEPG.removeValue(forKey: source.id) {
+            await EPGManager.shared.loadEPG(for: source.id, from: found.url.absoluteString)
+            if EPGManager.shared.sourceErrors[source.id] == nil {
+                loadedGuide = true
+                if let index = sources.firstIndex(where: { $0.id == source.id }),
+                   (sources[index].epgUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    sources[index].epgUrl = found.url.absoluteString
+                    saveSources()
+                    DebugLog.shared.success(
+                        "Saved EPG link (\(found.reason))",
+                        source: source.name,
+                        category: "EPG",
+                        detail: DebugLog.redact(found.url)
+                    )
+                }
+            } else {
+                let error = EPGManager.shared.sourceErrors[source.id] ?? "The guide did not load"
+                EPGManager.shared.sourceErrors.removeValue(forKey: source.id)
+                DebugLog.shared.warning(
+                    "EPG link did not load (\(found.reason)): \(error)",
+                    source: source.name,
+                    category: "EPG",
+                    detail: DebugLog.redact(found.url)
+                )
+            }
+        }
+
+        if loadedGuide {
+            await MainActor.run {
+                currentTick += 1
+                updateEPGCache()
+                updateFilteredChannels()
+            }
+        }
+    }
+
+    /// Candidate guide links found while loading. Saved only after the file actually loads.
+    private var discoveredEPG: [UUID: (url: URL, reason: String)] = [:]
+
+    private func adoptDiscoveredEPG(_ url: URL, for sourceID: UUID, reason: String) {
+        guard let source = sources.first(where: { $0.id == sourceID }) else { return }
+        let existing = source.epgUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard existing.isEmpty else { return }
+        discoveredEPG[sourceID] = (url, reason)
+        DebugLog.shared.info(
+            "Detected EPG link (\(reason))",
+            source: source.name,
+            category: "EPG",
+            detail: DebugLog.redact(url)
+        )
     }
     
     // Load M3U
@@ -1052,6 +1102,10 @@ class AppState {
             
             guard let content = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else {
                 throw URLError(.cannotDecodeContentData)
+            }
+
+            if let discovered = EPGDiscovery.m3uGuideURL(content: content, playlistURL: url) {
+                adoptDiscoveredEPG(discovered.url, for: source.id, reason: discovered.reason)
             }
             
             let firstLine = content.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
@@ -1126,6 +1180,9 @@ class AppState {
         }
         
         do {
+            if let guide = EPGDiscovery.xtreamGuideURL(server: urlStr, username: user, password: pass) {
+                adoptDiscoveredEPG(guide, for: source.id, reason: "Xtream xmltv.php")
+            }
             DebugLog.shared.info("Authenticating as \(user)", source: source.name, category: "Xtream")
             let authenticated = try await client.authenticate()
             if !authenticated { throw XtreamError.authenticationFailed }
@@ -1185,6 +1242,9 @@ class AppState {
             DebugLog.shared.info("Authenticating portal", source: source.name, category: "Stalker")
             try await client.authenticate()
             updateExpiration(client.accountExpiration, for: source.id)
+            if let guide = client.accountGuideURL {
+                adoptDiscoveredEPG(guide, for: source.id, reason: "Stalker profile")
+            }
             let live = (try? await client.fetchLiveChannels()) ?? []
             let video = await client.fetchVideoCatalog()
             StalkerEpisodeStore.shared.replace(sourceId: source.id, episodes: video.episodes)
@@ -1239,6 +1299,9 @@ class AppState {
             DebugLog.shared.error(message, source: source.name, category: "Stalker")
             if client.accountExpiration != nil {
                 updateExpiration(client.accountExpiration, for: source.id)
+            }
+            if let guide = client.accountGuideURL {
+                adoptDiscoveredEPG(guide, for: source.id, reason: "Stalker profile")
             }
             await MainActor.run {
                 errorMessage = message
@@ -1313,19 +1376,6 @@ class AppState {
         )
         Task {
             await loadSource(source)
-            
-            // Load per-source EPG if configured
-            if let sourceEpg = source.epgUrl, !sourceEpg.isEmpty {
-                await EPGManager.shared.loadEPG(for: source.id, from: sourceEpg)
-                
-                
-                // Update EPG cache and UI
-                await MainActor.run {
-                    currentTick += 1
-                    updateEPGCache()  // Populate cache with new EPG data
-                    updateFilteredChannels()  // Refresh channel list with new EPG data
-                }
-            }
             
             if selectedSource == nil {
                 selectedSource = source

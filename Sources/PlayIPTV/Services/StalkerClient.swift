@@ -254,6 +254,7 @@ final class StalkerClient {
     private var random: String?
     private let cacheKey: String
     private(set) var accountExpiration: SourceExpiration?
+    private(set) var accountGuideURL: URL?
 
     init?(portal: String, mac: String, login: String?, password: String?, sourceName: String = "Stalker") {
         guard let portalURL = StalkerLink.portalURL(from: portal),
@@ -279,6 +280,7 @@ final class StalkerClient {
         apiURL = nil
         random = nil
         accountExpiration = nil
+        accountGuideURL = nil
         StalkerSessionCache.shared.remove(cacheKey)
 
         var lastError: Error = StalkerError.authenticationFailed
@@ -474,6 +476,7 @@ final class StalkerClient {
         ])
         if let dict = js as? [String: Any] {
             accountExpiration = SourceExpiration.fromStalkerProfile(dict)
+            accountGuideURL = EPGDiscovery.stalkerGuideURL(in: dict)
             if let accountExpiration {
                 DebugLog.log(.info, accountExpiration.summary, source: sourceName, category: "Stalker")
             }

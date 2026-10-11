@@ -222,6 +222,15 @@ struct SourceSettingsView: View {
                                     SourceExpirationLabel(expiration: expiration)
                                         .padding(.top, 2)
                                 }
+
+                                if let epg = source.epgUrl, !epg.isEmpty {
+                                    Text(DebugLog.redact(epg))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .textSelection(.enabled)
+                                        .help("EPG URL. Open Edit to copy the full link.")
+                                }
                                 
                                 // Show status and stats
                                 if appState.loadingSources.contains(source.id) {
@@ -311,13 +320,7 @@ struct SourceSettingsView: View {
                             // Refresh Button (always available)
                             Button(action: {
                                 Task {
-                                    // Reload source content (channels/VODs)
                                     await appState.loadSource(source)
-                                    
-                                    // Reload EPG if configured
-                                    if let epgUrl = source.epgUrl {
-                                        await EPGManager.shared.loadEPG(for: source.id, from: epgUrl)
-                                    }
                                 }
                             }) {
                                 Image(systemName: "arrow.clockwise")
@@ -519,9 +522,9 @@ struct AddSourceView: View {
                 Text("EPG URL (XMLTV)")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                TextField("Optional - Falls back to global EPG", text: $epgUrl)
+                TextField("Leave empty to detect automatically", text: $epgUrl)
                     .lineLimit(1)
-                Text("Leave empty to use global EPG from General settings")
+                Text("If this is empty, PlayIPTV looks for one XMLTV link when the source loads. A saved link is kept.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }

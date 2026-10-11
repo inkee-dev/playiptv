@@ -161,6 +161,13 @@ struct DebugWindowView: View {
                 if let expiration = appState.sourceExpirations[source.id] {
                     SourceExpirationLabel(expiration: expiration, font: .caption)
                 }
+
+                if let epg = source.epgUrl, !epg.isEmpty {
+                    Text("EPG \(DebugLog.redact(epg))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
                 
                 if loading {
                     Text("Connecting…")

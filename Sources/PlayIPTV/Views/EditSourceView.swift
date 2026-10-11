@@ -121,9 +121,9 @@ struct EditSourceView: View {
                 Text("EPG URL (XMLTV)")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                TextField("Optional - Falls back to global EPG", text: $epgUrl)
+                TextField("Leave empty to detect automatically", text: $epgUrl)
                     .lineLimit(1)
-                Text("Leave empty to use global EPG from General settings")
+                Text("If this is empty, PlayIPTV looks for one XMLTV link when the source loads. A saved link is kept.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
