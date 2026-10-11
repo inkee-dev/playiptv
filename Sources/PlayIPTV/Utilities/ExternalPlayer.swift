@@ -2,14 +2,14 @@ import AppKit
 import Foundation
 
 enum ExternalPlayerError: LocalizedError {
-    case notInstalled
+    case notInstalled(String)
     case unreadablePlaylist
     case launchFailed(String)
 
     var errorDescription: String? {
         switch self {
-        case .notInstalled:
-            return "VLC is not installed. Install VLC, or switch back to the built-in player in Settings."
+        case .notInstalled(let name):
+            return "\(name) is not installed. Install \(name), or switch back to the built-in player in Settings."
         case .unreadablePlaylist:
             return "Could not prepare the stream for VLC."
         case .launchFailed(let message):
@@ -21,9 +21,14 @@ enum ExternalPlayerError: LocalizedError {
 @MainActor
 enum ExternalPlayer {
     static let vlcBundleIdentifier = "org.videolan.vlc"
+    static let iinaBundleIdentifier = "com.colliderli.iina"
 
     static var isVLCInstalled: Bool {
-        applicationURL() != nil
+        vlcApplicationURL() != nil
+    }
+
+    static var isIINAInstalled: Bool {
+        iinaApplicationURL() != nil
     }
 
     static func openInVLC(
@@ -33,8 +38,8 @@ enum ExternalPlayer {
         referrer: String?,
         startPosition: Double?
     ) async throws {
-        guard let appURL = applicationURL() else {
-            throw ExternalPlayerError.notInstalled
+        guard let appURL = vlcApplicationURL() else {
+            throw ExternalPlayerError.notInstalled("VLC")
         }
 
         let playlistURL = try writePlaylist(
@@ -45,15 +50,81 @@ enum ExternalPlayer {
             startPosition: startPosition
         )
 
+        try await openURLs([playlistURL], withApplicationAt: appURL)
+    }
+
+    static func openInIINA(
+        url: URL,
+        title: String,
+        userAgent: String?,
+        referrer: String?,
+        startPosition: Double?
+    ) async throws {
+        guard let appURL = iinaApplicationURL() else {
+            throw ExternalPlayerError.notInstalled("IINA")
+        }
+
+        let cli = appURL.appendingPathComponent("Contents/MacOS/iina-cli")
+        guard FileManager.default.isExecutableFile(atPath: cli.path) else {
+            try await openURLs([url], withApplicationAt: appURL)
+            return
+        }
+
+        var arguments = ["--no-stdin"]
+        if !title.isEmpty {
+            arguments.append("--mpv-force-media-title=\(title)")
+        }
+        if let userAgent, !userAgent.isEmpty {
+            arguments.append("--mpv-user-agent=\(userAgent)")
+        }
+        if let referrer, !referrer.isEmpty {
+            arguments.append("--mpv-referrer=\(referrer)")
+        }
+        if let startPosition, startPosition > 1 {
+            arguments.append(String(format: "--mpv-start=%.3f", startPosition))
+        }
+        if let proxy = iinaHTTPProxy() {
+            arguments.append("--mpv-http-proxy=\(proxy)")
+        }
+        arguments.append(url.absoluteString)
+
+        let process = Process()
+        process.executableURL = cli
+        process.arguments = arguments
+        if let environment = iinaEnvironment() {
+            process.environment = environment
+        }
+        do {
+            try process.run()
+        } catch {
+            throw ExternalPlayerError.launchFailed(error.localizedDescription)
+        }
+    }
+
+    private static func vlcApplicationURL() -> URL? {
+        applicationURL(bundleIdentifier: vlcBundleIdentifier, appName: "VLC.app")
+    }
+
+    private static func iinaApplicationURL() -> URL? {
+        applicationURL(bundleIdentifier: iinaBundleIdentifier, appName: "IINA.app")
+    }
+
+    private static func applicationURL(bundleIdentifier: String, appName: String) -> URL? {
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) {
+            return url
+        }
+        let candidates = [
+            URL(fileURLWithPath: "/Applications").appendingPathComponent(appName),
+            URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Applications").appendingPathComponent(appName)
+        ]
+        return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    private static func openURLs(_ urls: [URL], withApplicationAt appURL: URL) async throws {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
-
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            NSWorkspace.shared.open(
-                [playlistURL],
-                withApplicationAt: appURL,
-                configuration: configuration
-            ) { _, error in
+            NSWorkspace.shared.open(urls, withApplicationAt: appURL, configuration: configuration) { _, error in
                 if let error {
                     continuation.resume(throwing: ExternalPlayerError.launchFailed(error.localizedDescription))
                 } else {
@@ -63,15 +134,32 @@ enum ExternalPlayer {
         }
     }
 
-    private static func applicationURL() -> URL? {
-        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: vlcBundleIdentifier) {
-            return url
+    /// HTTP proxies are an mpv option. SOCKS is passed through the process environment.
+    private static func iinaHTTPProxy() -> String? {
+        guard ProxySettings.shared.isActive, ProxySettings.shared.type == .http else { return nil }
+        return proxyURLString(scheme: "http")
+    }
+
+    private static func iinaEnvironment() -> [String: String]? {
+        guard ProxySettings.shared.isActive, ProxySettings.shared.type == .socks5,
+              let proxy = proxyURLString(scheme: "socks5") else { return nil }
+        var environment = ProcessInfo.processInfo.environment
+        environment["ALL_PROXY"] = proxy
+        environment["all_proxy"] = proxy
+        return environment
+    }
+
+    private static func proxyURLString(scheme: String) -> String? {
+        guard ProxySettings.shared.isActive, let port = ProxySettings.shared.portNumber else { return nil }
+        let host = ProxySettings.shared.host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else { return nil }
+        var value = "\(scheme)://"
+        let username = ProxySettings.shared.username
+        if !username.isEmpty {
+            value += "\(username):\(ProxySettings.shared.password)@"
         }
-        let candidates = [
-            URL(fileURLWithPath: "/Applications/VLC.app"),
-            URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Applications/VLC.app")
-        ]
-        return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
+        value += "\(host):\(port)"
+        return value
     }
 
     /// VLC applies per-item options from an XSPF playlist, including when the app is already running.

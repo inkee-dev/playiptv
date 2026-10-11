@@ -70,6 +70,11 @@ struct GeneralSettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.orange)
                         }
+                        if appState.playbackTarget == .iina && !ExternalPlayer.isIINAInstalled {
+                            Text("IINA was not found in Applications. Install it, then play a channel again.")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
                     }
                     .padding()
                 }
@@ -210,6 +215,8 @@ struct GeneralSettingsView: View {
             return "Streams play in the window."
         case .vlc:
             return "Streams open in the VLC app. VLC keeps its own playback controls."
+        case .iina:
+            return "Streams open in the IINA app. IINA keeps its own playback controls."
         }
     }
 }

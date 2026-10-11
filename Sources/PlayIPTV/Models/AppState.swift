@@ -170,6 +170,7 @@ class AppState {
     enum PlaybackTarget: String, CaseIterable, Codable, Identifiable {
         case builtIn = "Built-in"
         case vlc = "VLC"
+        case iina = "IINA"
 
         var id: String { rawValue }
 
@@ -1650,26 +1651,40 @@ class AppState {
                 channelName: channel.name,
                 sourceName: sourceName
             )
-        case .vlc:
+        case .vlc, .iina:
+            let playerName = playbackTarget.rawValue
             DebugLog.shared.info(
-                "Opening \(channel.name) in VLC",
+                "Opening \(channel.name) in \(playerName)",
                 source: sourceName,
                 category: "Playback",
                 detail: DebugLog.redact(url)
             )
             Task {
                 do {
-                    try await ExternalPlayer.openInVLC(
-                        url: url,
-                        title: channel.name,
-                        userAgent: userAgent,
-                        referrer: referrer,
-                        startPosition: startPosition
-                    )
+                    switch playbackTarget {
+                    case .vlc:
+                        try await ExternalPlayer.openInVLC(
+                            url: url,
+                            title: channel.name,
+                            userAgent: userAgent,
+                            referrer: referrer,
+                            startPosition: startPosition
+                        )
+                    case .iina:
+                        try await ExternalPlayer.openInIINA(
+                            url: url,
+                            title: channel.name,
+                            userAgent: userAgent,
+                            referrer: referrer,
+                            startPosition: startPosition
+                        )
+                    case .builtIn:
+                        return
+                    }
                     guard playbackGeneration == generation else { return }
                     isOpeningExternalStream = false
                     DebugLog.shared.success(
-                        "Opened \(channel.name) in VLC",
+                        "Opened \(channel.name) in \(playerName)",
                         category: "Playback",
                         detail: DebugLog.redact(url)
                     )
