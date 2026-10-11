@@ -265,32 +265,6 @@ struct ContentView: View {
         NSApp.keyWindow?.firstResponder?.tryToPerform(#selector(NSSplitViewController.toggleSidebar(_:)), with: nil)
     }
 
-    private func sourceMenuTitle(_ source: Source) -> String {
-        source.menuTitle(expiration: appState.sourceExpirations[source.id])
-    }
-
-    private var sourcePickerLabel: Text {
-        let name = Text("\(appState.selectedSource?.name ?? "Select Source") ")
-            .fontWeight(.medium)
-        let chevron = Text(Image(systemName: "chevron.down"))
-            .font(.system(size: 10, weight: .light))
-            .foregroundStyle(.secondary)
-        guard let source = appState.selectedSource,
-              let expiration = appState.sourceExpirations[source.id] else {
-            return name + chevron
-        }
-        let expiry = Text(expiration.summary + "  ")
-            .font(.caption)
-            .foregroundStyle(expirationTint(expiration))
-        return name + expiry + chevron
-    }
-
-    private func expirationTint(_ expiration: SourceExpiration) -> Color {
-        if expiration.isExpired { return .red }
-        if expiration.isExpiringSoon { return .orange }
-        return .secondary
-    }
-
     private var sourcePickerMenu: some View {
         Menu {
             Picker("Source", selection: Binding(
@@ -298,7 +272,7 @@ struct ContentView: View {
                 set: { appState.selectedSource = $0 }
             )) {
                 ForEach(appState.sources) { source in
-                    Text(sourceMenuTitle(source)).tag(Optional(source))
+                    Text(source.name).tag(Optional(source))
                 }
             }
             .pickerStyle(.inline)
@@ -310,7 +284,11 @@ struct ContentView: View {
                 openSettings()
             }
         } label: {
-            sourcePickerLabel
+            Text("\(appState.selectedSource?.name ?? "Select Source") ")
+                .fontWeight(.medium)
+            + Text(Image(systemName: "chevron.down"))
+                .font(.system(size: 10, weight: .light))
+                .foregroundStyle(.secondary)
         }
         .menuIndicator(.hidden)
         .fixedSize()
@@ -334,7 +312,7 @@ struct CustomToolbarView: View {
                     set: { appState.selectedSource = $0 }
                 )) {
                     ForEach(appState.sources) { source in
-                        Text(source.menuTitle(expiration: appState.sourceExpirations[source.id])).tag(Optional(source))
+                        Text(source.name).tag(Optional(source))
                     }
                 }
                 .pickerStyle(.inline)

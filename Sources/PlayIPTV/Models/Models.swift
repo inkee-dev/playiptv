@@ -111,10 +111,6 @@ enum SourceExpiration: Equatable, Sendable, Codable {
         }
     }
 
-    func menuTitle(sourceName: String) -> String {
-        "\(sourceName) — \(summary)"
-    }
-
     static func fromXtreamUserInfo(_ userInfo: [String: Any]) -> SourceExpiration? {
         guard userInfo.keys.contains("exp_date") else { return nil }
         switch parseExpiryValue(userInfo["exp_date"]) {
@@ -252,10 +248,5 @@ struct Source: Identifiable, Hashable, Codable {
         case .stalker:
             return stalkerUrl.flatMap { URL(string: $0) }
         }
-    }
-
-    func menuTitle(expiration: SourceExpiration?) -> String {
-        guard let expiration else { return name }
-        return expiration.menuTitle(sourceName: name)
     }
 }
