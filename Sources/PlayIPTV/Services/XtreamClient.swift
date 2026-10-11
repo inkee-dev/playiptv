@@ -117,6 +117,42 @@ struct XtreamClient {
         
         return true
     }
+
+    /// Reads `user_info.exp_date` from the account endpoint. Xtream uses a null or empty
+    /// date for subscriptions that do not expire. Returns nil when the server omits it.
+    func fetchAccountExpiration() async -> SourceExpiration? {
+        var components = URLComponents(url: baseURL.appendingPathComponent("player_api.php"), resolvingAgainstBaseURL: true)
+        components?.queryItems = [
+            URLQueryItem(name: "username", value: username),
+            URLQueryItem(name: "password", value: password)
+        ]
+        guard let url = components?.url else { return nil }
+
+        DebugLog.log(.info, "GET account \(DebugLog.redact(url))", source: sourceName, category: "Xtream")
+        do {
+            let (data, response) = try await NetworkSession.shared.data(from: url)
+            let status = (response as? HTTPURLResponse)?.statusCode
+            if let status, !(200...299).contains(status) {
+                DebugLog.log(.warning, "Account info returned HTTP \(status)", source: sourceName, category: "Xtream", detail: DebugLog.preview(data))
+                return nil
+            }
+            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let userInfo = object["user_info"] as? [String: Any] else {
+                DebugLog.log(.info, "Account info did not include an expiration date", source: sourceName, category: "Xtream")
+                return nil
+            }
+            guard let expiration = SourceExpiration.fromXtreamUserInfo(userInfo) else {
+                DebugLog.log(.info, "Account info did not include an expiration date", source: sourceName, category: "Xtream")
+                return nil
+            }
+            let accountStatus = (userInfo["status"] as? String).map { " (\($0))" } ?? ""
+            DebugLog.log(.info, "\(expiration.summary)\(accountStatus)", source: sourceName, category: "Xtream")
+            return expiration
+        } catch {
+            DebugLog.log(.warning, "Could not read account expiration: \(DebugLog.describe(error))", source: sourceName, category: "Xtream")
+            return nil
+        }
+    }
     
     func fetchLiveStreams(categoryId: String?) async throws -> [Channel] {
         var extra: [URLQueryItem] = []

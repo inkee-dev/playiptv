@@ -253,6 +253,7 @@ final class StalkerClient {
     private var token: String?
     private var random: String?
     private let cacheKey: String
+    private(set) var accountExpiration: SourceExpiration?
 
     init?(portal: String, mac: String, login: String?, password: String?, sourceName: String = "Stalker") {
         guard let portalURL = StalkerLink.portalURL(from: portal),
@@ -277,6 +278,7 @@ final class StalkerClient {
         token = nil
         apiURL = nil
         random = nil
+        accountExpiration = nil
         StalkerSessionCache.shared.remove(cacheKey)
 
         var lastError: Error = StalkerError.authenticationFailed
@@ -471,6 +473,10 @@ final class StalkerClient {
             "prehash": "false"
         ])
         if let dict = js as? [String: Any] {
+            accountExpiration = SourceExpiration.fromStalkerProfile(dict)
+            if let accountExpiration {
+                DebugLog.log(.info, accountExpiration.summary, source: sourceName, category: "Stalker")
+            }
             if let status = Self.string(dict, "status"), status == "0" || status == "2" {
                 if let message = Self.string(dict, "block_msg", "msg") {
                     throw StalkerError.portalMessage(message)

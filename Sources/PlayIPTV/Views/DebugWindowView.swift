@@ -157,6 +157,10 @@ struct DebugWindowView: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
+
+                if let expiration = appState.sourceExpirations[source.id] {
+                    SourceExpirationLabel(expiration: expiration, font: .caption)
+                }
                 
                 if loading {
                     Text("Connecting…")

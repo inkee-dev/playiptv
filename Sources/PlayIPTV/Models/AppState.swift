@@ -238,6 +238,7 @@ class AppState {
            let loadedSources = try? JSONDecoder().decode([Source].self, from: data) {
             self.sources = loadedSources
         }
+        loadStoredExpirations()
         
         // Load EPG URL
         self.epgUrl = UserDefaults.standard.string(forKey: "epgUrl")
@@ -774,6 +775,38 @@ class AppState {
     var isLoading: Bool = false
     var errorMessage: String?
     var sourceLoadErrors: [UUID: String] = [:]
+    /// Subscription end dates reported by Xtream and Stalker. M3U playlists do not provide one.
+    var sourceExpirations: [UUID: SourceExpiration] = [:]
+
+    private func loadStoredExpirations() {
+        guard let data = UserDefaults.standard.data(forKey: "sourceExpirations"),
+              let decoded = try? JSONDecoder().decode([String: SourceExpiration].self, from: data) else {
+            return
+        }
+        var restored: [UUID: SourceExpiration] = [:]
+        for (key, expiration) in decoded {
+            guard let id = UUID(uuidString: key),
+                  let source = sources.first(where: { $0.id == id }),
+                  source.type != .m3u else { continue }
+            restored[id] = expiration
+        }
+        sourceExpirations = restored
+    }
+
+    private func updateExpiration(_ expiration: SourceExpiration?, for sourceID: UUID) {
+        if let expiration {
+            sourceExpirations[sourceID] = expiration
+        } else {
+            sourceExpirations.removeValue(forKey: sourceID)
+        }
+        var stored: [String: SourceExpiration] = [:]
+        for (id, value) in sourceExpirations {
+            stored[id.uuidString] = value
+        }
+        if let data = try? JSONEncoder().encode(stored) {
+            UserDefaults.standard.set(data, forKey: "sourceExpirations")
+        }
+    }
     
     private func loadingDetail(for source: Source) -> String {
         switch source.type {
@@ -1097,6 +1130,9 @@ class AppState {
             let authenticated = try await client.authenticate()
             if !authenticated { throw XtreamError.authenticationFailed }
             DebugLog.shared.success("Authenticated", source: source.name, category: "Xtream")
+            if let expiration = await client.fetchAccountExpiration() {
+                updateExpiration(expiration, for: source.id)
+            }
             
             async let liveChannels = client.fetchLiveStreams(categoryId: nil)
             async let vodChannels = client.fetchVODStreams(categoryId: nil)
@@ -1148,6 +1184,7 @@ class AppState {
         do {
             DebugLog.shared.info("Authenticating portal", source: source.name, category: "Stalker")
             try await client.authenticate()
+            updateExpiration(client.accountExpiration, for: source.id)
             let live = (try? await client.fetchLiveChannels()) ?? []
             let video = await client.fetchVideoCatalog()
             StalkerEpisodeStore.shared.replace(sourceId: source.id, episodes: video.episodes)
@@ -1200,6 +1237,9 @@ class AppState {
         } catch {
             let message = DebugLog.describe(error)
             DebugLog.shared.error(message, source: source.name, category: "Stalker")
+            if client.accountExpiration != nil {
+                updateExpiration(client.accountExpiration, for: source.id)
+            }
             await MainActor.run {
                 errorMessage = message
                 sourceLoadErrors[source.id] = message
@@ -1297,6 +1337,7 @@ class AppState {
         sources.removeAll { $0.id == source.id }
         saveSources()
         sourceContent.removeValue(forKey: source.id)
+        updateExpiration(nil, for: source.id)
         if selectedSource?.id == source.id {
             selectedSource = nil
             selectedCategory = nil

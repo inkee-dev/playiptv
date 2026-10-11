@@ -217,6 +217,11 @@ struct SourceSettingsView: View {
                                 Text(source.type.displayName)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+
+                                if let expiration = appState.sourceExpirations[source.id] {
+                                    SourceExpirationLabel(expiration: expiration)
+                                        .padding(.top, 2)
+                                }
                                 
                                 // Show status and stats
                                 if appState.loadingSources.contains(source.id) {
