@@ -14,7 +14,7 @@ enum StreamType: String, Codable {
     }
 }
 
-enum CategoryType: String, CaseIterable, Identifiable {
+enum CategoryType: String, Codable, CaseIterable, Identifiable {
     case live
     case movie
     case series
@@ -22,14 +22,14 @@ enum CategoryType: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-struct Category: Identifiable, Hashable {
+struct Category: Identifiable, Hashable, Codable {
     let id: String
     let name: String
     let type: CategoryType
 }
 
-struct Channel: Identifiable, Hashable {
-    let id: UUID = UUID() // Unique ID for UI stability
+struct Channel: Identifiable, Hashable, Codable {
+    var id: UUID = UUID() // Unique ID for UI stability. Mutable so a saved list can restore it.
     var sourceId: UUID = UUID() // Link to origin source
     let streamId: String // The actual ID from source (URL or API ID)
     let name: String

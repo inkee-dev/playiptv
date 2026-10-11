@@ -51,14 +51,16 @@ class EPGManager: ObservableObject {
             print("DEBUG: EPG → Parsing XML data (\(data.count) bytes)")
             let channels = try await XMLTVParser.parse(xmlContent: xmlContent)
             
+            let fetchedAt = Date()
             await MainActor.run {
                 self.sourceEPGData[sourceId] = channels
                 self.buildSourceLookup(for: sourceId, channels: channels)
                 self.loadingSourceIds.remove(sourceId)
-                self.sourceUpdateTimes[sourceId] = Date()
+                self.sourceUpdateTimes[sourceId] = fetchedAt
                 self.sourceErrors.removeValue(forKey: sourceId)
                 DebugLog.shared.success("Loaded \(channels.count) EPG channels", category: "EPG")
             }
+            ContentCache.saveGuide(channels, id: sourceId, fetchedAt: fetchedAt)
             
         } catch {
             await MainActor.run {
@@ -94,14 +96,16 @@ class EPGManager: ObservableObject {
             print("DEBUG: EPG → Parsing global XML data (\(data.count) bytes)")
             let channels = try await XMLTVParser.parse(xmlContent: xmlContent)
             
+            let fetchedAt = Date()
             await MainActor.run {
                 self.globalEPGData = channels
                 self.buildGlobalLookup(channels: channels)
                 self.isLoading = false
-                self.lastUpdateTime = Date()
+                self.lastUpdateTime = fetchedAt
                 self.lastError = nil
                 DebugLog.shared.success("Loaded \(channels.count) channels for global EPG", category: "EPG")
             }
+            ContentCache.saveGlobalGuide(channels, fetchedAt: fetchedAt)
             
         } catch {
             await MainActor.run {
@@ -143,20 +147,38 @@ class EPGManager: ObservableObject {
         return globalLookup[normalized]?.getNextProgram()
     }
     
+    func restore(sourceId: UUID, channels: [EPGChannel], fetchedAt: Date) {
+        sourceEPGData[sourceId] = channels
+        buildSourceLookup(for: sourceId, channels: channels)
+        sourceUpdateTimes[sourceId] = fetchedAt
+        sourceErrors.removeValue(forKey: sourceId)
+    }
+
+    func restoreGlobal(channels: [EPGChannel], fetchedAt: Date) {
+        globalEPGData = channels
+        buildGlobalLookup(channels: channels)
+        lastUpdateTime = fetchedAt
+        lastError = nil
+    }
+
     /// Clear all EPG data
     func clearEPG() {
         sourceEPGData = [:]
         globalEPGData = []
         sourceLookup = [:]
         globalLookup = [:]
+        sourceUpdateTimes = [:]
         lastUpdateTime = nil
         lastError = nil
+        ContentCache.removeGlobalGuide()
     }
     
     /// Clear EPG data for a specific source
     func clearEPG(for sourceId: UUID) {
         sourceEPGData.removeValue(forKey: sourceId)
         sourceLookup.removeValue(forKey: sourceId)
+        sourceUpdateTimes.removeValue(forKey: sourceId)
+        ContentCache.removeGuide(sourceId)
     }
     
     // MARK: - Private Helpers

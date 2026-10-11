@@ -157,6 +157,16 @@ class AppState {
         }
     }
 
+    /// How long a saved channel list is kept before the app downloads it again.
+    var catalogRefreshInterval: EPGRefreshInterval = .twentyFourHours {
+        didSet {
+            UserDefaults.standard.set(catalogRefreshInterval.rawValue, forKey: "catalogRefreshInterval")
+        }
+    }
+
+    /// When each source's channel list was last downloaded.
+    var catalogFetchedAt: [UUID: Date] = [:]
+
     enum PlaybackTarget: String, CaseIterable, Codable, Identifiable {
         case builtIn = "Built-in"
         case vlc = "VLC"
@@ -248,6 +258,10 @@ class AppState {
            let interval = EPGRefreshInterval(rawValue: savedInterval) {
             self.epgRefreshInterval = interval
         }
+        if let savedCatalogInterval = UserDefaults.standard.string(forKey: "catalogRefreshInterval"),
+           let interval = EPGRefreshInterval(rawValue: savedCatalogInterval) {
+            self.catalogRefreshInterval = interval
+        }
 
         if let savedPlayer = UserDefaults.standard.string(forKey: "playbackTarget"),
            let player = PlaybackTarget(rawValue: savedPlayer) {
@@ -261,9 +275,9 @@ class AppState {
         // Load content for all sources
         Task {
             DebugLog.shared.info("PlayIPTV starting — \(sources.count) saved source(s)", category: "App")
-            await loadAllSources()
+            restoreCachedContent()
             
-            // Restore selection AFTER loading (or concurrent with it)
+            // Restore selection so the saved channel list can show immediately.
             if selectedSource == nil {
                 if let lastId = UserDefaults.standard.string(forKey: "lastSourceId"),
                    let source = sources.first(where: { $0.id.uuidString == lastId }) {
@@ -273,16 +287,18 @@ class AppState {
                     await MainActor.run { selectedSource = first }
                 }
             }
+            updateFilteredChannels()
+            updateEPGCache()
+
+            await loadAllSources(force: false)
             
-            // Load global EPG if configured
-            if let epgUrl = epgUrl, !epgUrl.isEmpty {
+            // Load global EPG when it is missing or older than its refresh interval.
+            if let epgUrl = epgUrl, !epgUrl.isEmpty, needsRefresh(since: lastEPGUpdate, interval: epgRefreshInterval) {
                 await EPGManager.shared.loadGlobalEPG(from: epgUrl)
                 await MainActor.run {
                     lastEPGUpdate = EPGManager.shared.lastUpdateTime
                 }
             }
-            
-            // Per-source EPG is loaded inside loadSource, including links detected from the provider.
             
             // Force UI update immediately after loading EPG
             await MainActor.run {
@@ -939,23 +955,38 @@ class AppState {
     // Multi-source management
     var sources: [Source] = []
     
-    func loadAllSources() async {
+    func loadAllSources(force: Bool = true) async {
         DebugLog.shared.info("Loading \(sources.count) source(s)…", category: "Source")
-        await MainActor.run {
-            loadingSources = Set(sources.map { $0.id })
+        if force {
+            await MainActor.run {
+                loadingSources = Set(sources.map { $0.id })
+            }
         }
         
         await withTaskGroup(of: Void.self) { group in
             for source in sources {
                 group.addTask {
-                    await self.loadSource(source)
+                    await self.loadSource(source, force: force)
                 }
             }
         }
     }
     
-    // Load Specific Source
-    func loadSource(_ source: Source) async {
+    // Load Specific Source. Forced loads ignore the saved channel list and guide.
+    func loadSource(_ source: Source, force: Bool = true) async {
+        if !force,
+           let cached = sourceContent[source.id],
+           !cached.channels.isEmpty,
+           !needsRefresh(since: catalogFetchedAt[source.id], interval: catalogRefreshInterval) {
+            DebugLog.shared.info(
+                "Using saved channel list (\(cached.channels.count) items)",
+                source: source.name,
+                category: "Source"
+            )
+            await refreshGuide(for: source, force: false)
+            return
+        }
+
         let endpoint = source.url?.absoluteString
         var detail = endpoint.map { DebugLog.redact($0) }
         if ProxySettings.shared.isActive {
@@ -986,21 +1017,34 @@ class AppState {
         }
         
         await MainActor.run {
-            sourceContent[source.id] = newContent
             loadingSources.remove(source.id)
             
-            if sourceLoadErrors[source.id] == nil {
-                if newContent.channels.isEmpty {
+            if newContent.channels.isEmpty {
+                if sourceContent[source.id]?.channels.isEmpty != false {
+                    sourceContent[source.id] = newContent
+                }
+                if sourceLoadErrors[source.id] == nil {
                     let message = "Connected but received 0 channels."
                     sourceLoadErrors[source.id] = message
                     DebugLog.shared.warning(message, source: source.name, category: "Source")
-                } else {
-                    DebugLog.shared.success(
-                        "Loaded \(newContent.channels.count) item(s) for \(source.name)",
-                        source: source.name,
-                        category: "Source"
-                    )
                 }
+            } else {
+                sourceContent[source.id] = newContent
+                let fetchedAt = Date()
+                catalogFetchedAt[source.id] = fetchedAt
+                ContentCache.saveCatalog(
+                    ContentCache.CatalogSnapshot(
+                        fetchedAt: fetchedAt,
+                        channels: newContent.channels,
+                        categories: newContent.categories
+                    ),
+                    id: source.id
+                )
+                DebugLog.shared.success(
+                    "Loaded \(newContent.channels.count) item(s) for \(source.name)",
+                    source: source.name,
+                    category: "Source"
+                )
             }
             
             if selectedCategory == nil {
@@ -1011,11 +1055,21 @@ class AppState {
             updateFilteredChannels()
         }
 
+        await refreshGuide(for: source, force: force)
+    }
+
+    private func refreshGuide(for source: Source, force: Bool) async {
         var loadedGuide = false
-        if let guide = sources.first(where: { $0.id == source.id })?.epgUrl, !guide.isEmpty {
+        let current = sources.first(where: { $0.id == source.id }) ?? source
+        if let guide = current.epgUrl, !guide.isEmpty {
             discoveredEPG.removeValue(forKey: source.id)
-            await EPGManager.shared.loadEPG(for: source.id, from: guide)
-            loadedGuide = EPGManager.shared.sourceErrors[source.id] == nil
+            if !force && !needsRefresh(since: EPGManager.shared.sourceUpdateTimes[source.id], interval: epgInterval(for: current)) {
+                DebugLog.shared.info("Using saved EPG", source: source.name, category: "EPG")
+                loadedGuide = true
+            } else {
+                await EPGManager.shared.loadEPG(for: source.id, from: guide)
+                loadedGuide = EPGManager.shared.sourceErrors[source.id] == nil
+            }
         } else if let found = discoveredEPG.removeValue(forKey: source.id) {
             await EPGManager.shared.loadEPG(for: source.id, from: found.url.absoluteString)
             if EPGManager.shared.sourceErrors[source.id] == nil {
@@ -1049,6 +1103,48 @@ class AppState {
                 updateEPGCache()
                 updateFilteredChannels()
             }
+        }
+    }
+
+    private func epgInterval(for source: Source) -> EPGRefreshInterval {
+        let raw = source.epgRefreshInterval ?? EPGRefreshInterval.twentyFourHours.rawValue
+        return EPGRefreshInterval(rawValue: raw) ?? .twentyFourHours
+    }
+
+    /// Manual keeps saved data until a refresh. Timed intervals download again once they elapse.
+    private func needsRefresh(since fetchedAt: Date?, interval: EPGRefreshInterval) -> Bool {
+        guard let fetchedAt else { return true }
+        guard let seconds = interval.seconds else { return false }
+        return Date().timeIntervalSince(fetchedAt) >= seconds
+    }
+
+    private func restoreCachedContent() {
+        let ids = sources.map(\.id)
+        let catalogs = ContentCache.loadCatalogs(for: ids)
+        for (id, snapshot) in catalogs where !snapshot.channels.isEmpty {
+            sourceContent[id] = SourceContent(channels: snapshot.channels, categories: snapshot.categories)
+            catalogFetchedAt[id] = snapshot.fetchedAt
+            DebugLog.shared.info(
+                "Restored \(snapshot.channels.count) saved channels",
+                source: sources.first(where: { $0.id == id })?.name,
+                category: "Source"
+            )
+        }
+
+        let guides = ContentCache.loadGuides(for: ids)
+        for (id, snapshot) in guides where !snapshot.channels.isEmpty {
+            EPGManager.shared.restore(sourceId: id, channels: snapshot.channels, fetchedAt: snapshot.fetchedAt)
+            DebugLog.shared.info(
+                "Restored saved EPG (\(snapshot.channels.count) channels)",
+                source: sources.first(where: { $0.id == id })?.name,
+                category: "EPG"
+            )
+        }
+
+        if let global = ContentCache.loadGlobalGuide(), !global.channels.isEmpty {
+            EPGManager.shared.restoreGlobal(channels: global.channels, fetchedAt: global.fetchedAt)
+            lastEPGUpdate = global.fetchedAt
+            DebugLog.shared.info("Restored saved global EPG (\(global.channels.count) channels)", category: "EPG")
         }
     }
 
@@ -1387,6 +1483,10 @@ class AppState {
         sources.removeAll { $0.id == source.id }
         saveSources()
         sourceContent.removeValue(forKey: source.id)
+        catalogFetchedAt.removeValue(forKey: source.id)
+        ContentCache.removeCatalog(source.id)
+        ContentCache.removeGuide(source.id)
+        EPGManager.shared.clearEPG(for: source.id)
         updateExpiration(nil, for: source.id)
         if selectedSource?.id == source.id {
             selectedSource = nil
@@ -1614,38 +1714,12 @@ class AppState {
     }
     
     private func checkAndRefreshEPG() async {
-        let now = Date()
-        
-        // Check global EPG (uses global interval setting)
-        if let epgUrl = epgUrl, !epgUrl.isEmpty, let interval = epgRefreshInterval.seconds {
-            if let lastUpdate = lastEPGUpdate {
-                let timeSinceUpdate = now.timeIntervalSince(lastUpdate)
-                if timeSinceUpdate >= interval {
-                    print("DEBUG: EPG → Auto-refreshing global EPG")
-                    await EPGManager.shared.loadGlobalEPG(from: epgUrl)
-                    lastEPGUpdate = EPGManager.shared.lastUpdateTime
-                }
-            }
-        }
-    
-        // Check per-source EPG (uses per-source interval setting)
-        for source in sources {
-            if let sourceEpg = source.epgUrl, !sourceEpg.isEmpty {
-                // Get source-specific interval or default to 24 hours
-                let intervalString = source.epgRefreshInterval ?? EPGRefreshInterval.twentyFourHours.rawValue
-                guard let sourceInterval = EPGRefreshInterval(rawValue: intervalString),
-                      let seconds = sourceInterval.seconds else {
-                    continue // Skip if manual refresh
-                }
-                
-                if let lastUpdate = EPGManager.shared.sourceUpdateTimes[source.id] {
-                    let timeSinceUpdate = now.timeIntervalSince(lastUpdate)
-                    if timeSinceUpdate >= seconds {
-                        print("DEBUG: EPG → Auto-refreshing EPG for source \(source.name)")
-                        await EPGManager.shared.loadEPG(for: source.id, from: sourceEpg)
-                    }
-                }
-            }
+        await loadAllSources(force: false)
+
+        if let epgUrl = epgUrl, !epgUrl.isEmpty, needsRefresh(since: lastEPGUpdate, interval: epgRefreshInterval) {
+            DebugLog.shared.info("Refreshing global EPG", category: "EPG")
+            await EPGManager.shared.loadGlobalEPG(from: epgUrl)
+            lastEPGUpdate = EPGManager.shared.lastUpdateTime
         }
     }
     

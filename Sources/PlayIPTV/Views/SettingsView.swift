@@ -119,9 +119,25 @@ struct GeneralSettingsView: View {
                     .padding()
                 }
                 
+                GroupBox(label: Label("Channel Lists", systemImage: "list.bullet")) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Saved channel lists are reused until this interval passes. Manual keeps them until you refresh a source.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Picker("Refresh", selection: $appState.catalogRefreshInterval) {
+                            ForEach(AppState.EPGRefreshInterval.allCases) { interval in
+                                Text(interval.rawValue).tag(interval)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+                    .padding()
+                }
+
                 GroupBox(label: Label("EPG (Electronic Program Guide)", systemImage: "list.bullet.rectangle")) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Configure an XMLTV EPG source to display current programs for Live TV channels.")
+                    Text("Configure an XMLTV EPG source to display current programs for Live TV channels. A saved guide is reused until the interval below passes. Manual keeps it until you refresh.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     
@@ -221,6 +237,12 @@ struct SourceSettingsView: View {
                                 if let expiration = appState.sourceExpirations[source.id] {
                                     SourceExpirationLabel(expiration: expiration)
                                         .padding(.top, 2)
+                                }
+
+                                if let fetched = appState.catalogFetchedAt[source.id] {
+                                    Text("Channels updated \(fetched.formatted(date: .abbreviated, time: .shortened))")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
                                 }
 
                                 if let epg = source.epgUrl, !epg.isEmpty {
